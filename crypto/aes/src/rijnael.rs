@@ -1,39 +1,25 @@
 use core::ops::{Index, IndexMut};
 
-// TODO -- this is a convenience wrapper to make the notation state[(r,c)] work
-//         but may end up having perf / mem usage impacts and therefore not be worth it.
-#[derive(Clone, Copy)]
-struct State([u8; 16]);
-
-impl From<[u8; 16]> for State {
-    fn from(value: [u8; 16]) -> Self {
-        Self(value)
-    }
-}
-
-impl Into<[u8; 16]> for State {
-    fn into(self) -> [u8; 16] {
-        self.0
-    }
-}
-
-impl Index<(usize, usize)> for State {
-    type Output = u8;
-
-    fn index(&self, index: (usize, usize)) -> &Self::Output {
-        let (r, c) = index;
-        &self.0[r + 4 * c]
-    }
-}
-
-impl IndexMut<(usize, usize)> for State {
-    fn index_mut(&mut self, index: (usize, usize)) -> &mut Self::Output {
-        let (r, c) = index;
-        &mut self.0[r + 4 * c]
-    }
-}
+use crate::state::{
+    AES_BLOCK_LEN, NB, inv_mix_columns, inv_shift_rows, inv_sub_bytes, mix_columns, shift_rows,
+    sub_bytes,
+};
+use bouncycastle_core::errors::{KeyMaterialError, SymmetricCipherError};
+use bouncycastle_core::key_material::{KeyMaterial, KeyMaterialTrait, KeyType};
+use bouncycastle_core::traits::{Algorithm, SecurityStrength};
+use bouncycastle_utils::secret::Secret;
+use core::fmt;
 
 // TODO -- Added constants for specific runds
+/* *** Algorithm names *** */
+
+/// The library-wide name for AES with a 128-bit key.
+pub const AES_128_NAME: &str = "AES-128";
+/// The library-wide name for AES with a 192-bit key.
+pub const AES_192_NAME: &str = "AES-192";
+/// The library-wide name for AES with a 256-bit key.
+pub const AES_256_NAME: &str = "AES-256";
+
 /* *** Parameters from FIPS 197 Table 3 (Key-Block-Round Combinations) *** */
 
 /// The AES-128 key length in bytes; `Nk = 4` words.
@@ -58,6 +44,42 @@ pub const AES128_KEY_SCHEDULE_WORDS: usize = 4 * (AES128_NUM_ROUNDS + 1);
 pub const AES192_KEY_SCHEDULE_WORDS: usize = 4 * (AES192_NUM_ROUNDS + 1);
 /// The length of the AES-256 key schedule, in 32-bit words: `4 * (Nr + 1)`.
 pub const AES256_KEY_SCHEDULE_WORDS: usize = 4 * (AES256_NUM_ROUNDS + 1);
+
+/* *** Key types *** */
+
+/// The [`KeyMaterial`] type that [`AES128::new`] takes: a 128-bit AES key.
+///
+/// Using a fixed-capacity key type means a key of the wrong size for the variant is a compile
+/// error rather than a runtime one.
+pub type AES128Key = KeyMaterial<AES128_KEY_LEN>;
+/// The [`KeyMaterial`] type that [`AES192::new`] takes: a 192-bit AES key.
+pub type AES192Key = KeyMaterial<AES192_KEY_LEN>;
+/// The [`KeyMaterial`] type that [`AES256::new`] takes: a 256-bit AES key.
+pub type AES256Key = KeyMaterial<AES256_KEY_LEN>;
+
+/* *** The three variants specified by FIPS 197 *** */
+
+/// AES with a 128-bit key: 10 rounds (FIPS 197 Table 3).
+pub type AES128 = AES<AES128_KEY_LEN, AES128_NUM_ROUNDS, AES128_KEY_SCHEDULE_WORDS>;
+/// AES with a 192-bit key: 12 rounds (FIPS 197 Table 3).
+pub type AES192 = AES<AES192_KEY_LEN, AES192_NUM_ROUNDS, AES192_KEY_SCHEDULE_WORDS>;
+/// AES with a 256-bit key: 14 rounds (FIPS 197 Table 3).
+pub type AES256 = AES<AES256_KEY_LEN, AES256_NUM_ROUNDS, AES256_KEY_SCHEDULE_WORDS>;
+
+impl Algorithm for AES128 {
+    const ALG_NAME: &'static str = AES_128_NAME;
+    const MAX_SECURITY_STRENGTH: SecurityStrength = SecurityStrength::_128bit;
+}
+
+impl Algorithm for AES192 {
+    const ALG_NAME: &'static str = AES_192_NAME;
+    const MAX_SECURITY_STRENGTH: SecurityStrength = SecurityStrength::_192bit;
+}
+
+impl Algorithm for AES256 {
+    const ALG_NAME: &'static str = AES_256_NAME;
+    const MAX_SECURITY_STRENGTH: SecurityStrength = SecurityStrength::_256bit;
+}
 
 /// Algorithm 1 CIPHER(in, Nr, w) -> state
 fn Cipher<const Nr: usize>(input: State) -> State {
