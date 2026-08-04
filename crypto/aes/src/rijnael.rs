@@ -33,6 +33,32 @@ impl IndexMut<(usize, usize)> for State {
     }
 }
 
+// TODO -- Added constants for specific runds
+/* *** Parameters from FIPS 197 Table 3 (Key-Block-Round Combinations) *** */
+
+/// The AES-128 key length in bytes; `Nk = 4` words.
+pub const AES128_KEY_LEN: usize = 16;
+/// The AES-192 key length in bytes; `Nk = 6` words.
+pub const AES192_KEY_LEN: usize = 24;
+/// The AES-256 key length in bytes; `Nk = 8` words.
+pub const AES256_KEY_LEN: usize = 32;
+
+/// The number of rounds `Nr` for AES-128.
+pub const AES128_NUM_ROUNDS: usize = 10;
+/// The number of rounds `Nr` for AES-192.
+pub const AES192_NUM_ROUNDS: usize = 12;
+/// The number of rounds `Nr` for AES-256.
+pub const AES256_NUM_ROUNDS: usize = 14;
+
+/// The length of the AES-128 key schedule, in 32-bit words: `4 * (Nr + 1)` (FIPS 197 Section 5.2).
+///
+/// Counted in words rather than bytes, hence `WORDS` and not the library's usual `LEN` suffix.
+pub const AES128_KEY_SCHEDULE_WORDS: usize = 4 * (AES128_NUM_ROUNDS + 1);
+/// The length of the AES-192 key schedule, in 32-bit words: `4 * (Nr + 1)`.
+pub const AES192_KEY_SCHEDULE_WORDS: usize = 4 * (AES192_NUM_ROUNDS + 1);
+/// The length of the AES-256 key schedule, in 32-bit words: `4 * (Nr + 1)`.
+pub const AES256_KEY_SCHEDULE_WORDS: usize = 4 * (AES256_NUM_ROUNDS + 1);
+
 /// Algorithm 1 CIPHER(in, Nr, w) -> state
 fn Cipher<const Nr: usize>(input: State) -> State {
     // 2: state ← in  ▷ See Sec. 3.4
@@ -71,4 +97,15 @@ pub(crate) fn SubWord(word: u32) -> u32 {
     let [mut a0, mut a1, mut a2, mut a3] = word.to_le_bytes();
 
     u32::from_le_bytes([a1, a2, a3, a0])
+}
+
+/// Eqn (5.9): AddRoundKey. [s'_(0,c), s'_(1,c), s'_(2,c), s'_(3,c)],s1,c,s2,c,s3,c]) = [s0,c,s1,c,s2,c,s3,c]⊕[w(4∗round+c)] for 0 ≤ c < 4
+pub(crate) fn AddRoundKey(state: &mut [u8; AES_BLOCK_LEN], w: &[u32; W_WORDS], round: usize) {
+    for c in 0..NB {
+        let round_key_word = w[4 * round + c].to_be_bytes();
+        state[4 * c] ^= round_key_word[0];
+        state[4 * c + 1] ^= round_key_word[1];
+        state[4 * c + 2] ^= round_key_word[2];
+        state[4 * c + 3] ^= round_key_word[3];
+    }
 }
