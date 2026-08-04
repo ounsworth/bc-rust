@@ -116,33 +116,6 @@ pub struct AES<const KEY_LEN: usize, const NR: usize, const W_WORDS: usize> {
     w: Secret<[u32; W_WORDS]>,
 }
 
-/// Algorithm 1 CIPHER(in, Nr, w) -> state
-fn Cipher<const Nr: usize>(input: State) -> State {
-    // 2: state ← in  ▷ See Sec. 3.4
-    // TODO -- is this clone necessary? Can we take `input: &mut State` and then act directly on it?
-    //         Equivalently phrased, is there any point in AES where you still need to have the original
-    //         input state, or are we free to act in-place?
-    //         That said, even if we can work in-place, it's only 16 bytes and rust may actually
-    //         perform faster working on a copy, so do some benching here.
-    let mut state = input.clone();
-
-    // 3: state ← AddRoundKey(state, w[0..3])  ▷ See Sec. 5.1.4
-
-    // 4: for round from 1 to Nr − 1 do
-    // 5:   state ← SubBytes(state)  ▷ See Sec. 5.1.1
-    // 6:   state ← ShiftRows(state)  ▷ See Sec. 5.1.2
-    // 7:   state ← MixColumns(state)  ▷ See Sec. 5.1.3
-    // 8:   state ← AddRoundKey(state, w[4 ∗ round .. 4 ∗ round + 3])
-    // 9: end for
-
-    // 10: state ← SubBytes(state)
-    // 11: state ← ShiftRows(state)
-    // 12: state ← AddRoundKey(state, w[4 ∗ Nr .. 4 ∗ Nr + 3])
-
-    // 13: return state  ▷ See Sec. 3.4
-    state
-}
-
 /// Eqn (5.10): RotWord(\[a0, a1, a2, a3]) = \[a1, a2, a3, a0]
 pub(crate) fn RotWord(word: u32) -> u32 {
     let [a0, a1, a2, a3] = word.to_le_bytes();
@@ -161,7 +134,7 @@ where
     Self: Algorithm, 
 {
     /// Eqn (5.9): AddRoundKey. [s'_(0,c), s'_(1,c), s'_(2,c), s'_(3,c)],s1,c,s2,c,s3,c]) = [s0,c,s1,c,s2,c,s3,c]⊕[w(4∗round+c)] for 0 ≤ c < 4
-    pub(crate) fn AddRoundKey(state: &mut [u8; AES_BLOCK_LEN], w: &[u32; W_WORDS], round: usize) {
+    pub(crate) fn add_round_key(state: &mut [u8; AES_BLOCK_LEN], w: &[u32; W_WORDS], round: usize) {
         for c in 0..NB {
             let round_key_word = w[4 * round + c].to_be_bytes();
             state[4 * c] ^= round_key_word[0];
@@ -169,5 +142,29 @@ where
             state[4 * c + 2] ^= round_key_word[2];
             state[4 * c + 3] ^= round_key_word[3];
         }
+    }
+
+    /// Algorithm 1 CIPHER(in, Nr, w) -> state
+    fn cipher(&self, input: &[u8; AES_BLOCK_LEN], output: &mut [u8; AES_BLOCK_LEN]) {
+        // 2: state ← in  ▷ See Sec. 3.4
+        let mut state = Secret::<[u8; AES_BLOCK_LEN]>::new();
+        *state = *input;
+
+        // 3: state ← AddRoundKey(state, w[0..3])  ▷ See Sec. 5.1.4
+        Self::add_round_key(&mut state, &self.w, 0);
+
+        // 4: for round from 1 to Nr − 1 do
+        // 5:   state ← SubBytes(state)  ▷ See Sec. 5.1.1
+        // 6:   state ← ShiftRows(state)  ▷ See Sec. 5.1.2
+        // 7:   state ← MixColumns(state)  ▷ See Sec. 5.1.3
+        // 8:   state ← AddRoundKey(state, w[4 ∗ round .. 4 ∗ round + 3])
+        // 9: end for
+
+        // 10: state ← SubBytes(state)
+        // 11: state ← ShiftRows(state)
+        // 12: state ← AddRoundKey(state, w[4 ∗ Nr .. 4 ∗ Nr + 3])
+
+        // 13: return state  ▷ See Sec. 3.4
+        *output = *state;
     }
 }
