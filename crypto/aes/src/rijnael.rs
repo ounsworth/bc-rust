@@ -81,6 +81,41 @@ impl Algorithm for AES256 {
     const MAX_SECURITY_STRENGTH: SecurityStrength = SecurityStrength::_256bit;
 }
 
+// Deliberately no `AlgorithmOID` impl: NIST's Computer Security Objects Register assigns AES OIDs
+// per *mode* (id-aes128-CBC, id-aes128-GCM, ...), not to the bare block cipher, so the OIDs belong
+// on the mode-of-operation types rather than here.
+
+/// The AES block cipher engine, holding one expanded key schedule.
+///
+/// You almost certainly want one of the three named variants -- [`AES128`], [`AES192`] or
+/// [`AES256`] -- rather than naming this type directly. It is generic only so that the three
+/// variants share one implementation, with the key schedule sized exactly at compile time.
+///
+/// The const parameters are:
+///
+/// * `KEY_LEN`: cipher key length in bytes, ie `4 * Nk`.
+/// * `NR`: number of rounds `Nr`.
+/// * `W_WORDS`: key schedule length in 32-bit words, ie `4 * (Nr + 1)`.
+///
+/// Only the three combinations in FIPS 197 Table 3 are usable: everything on this type is gated on
+/// `Self: Algorithm`, and [`Algorithm`] is implemented only for [`AES128`], [`AES192`] and
+/// [`AES256`]. Because both that trait and this struct are foreign to downstream crates, the orphan
+/// rule prevents anyone adding a fourth combination, so a nonsense parameterization such as
+/// `AES<16, 3, 44>` has no constructor and no methods. (FIPS 197 Section 6.3 notes that future
+/// revisions might add parameter values; adding one here means adding a variant, its `Algorithm`
+/// impl, and its test vectors, which is exactly the review that such a change deserves.)
+///
+/// # 🚨 Security 🚨
+///
+/// An instance of this type *is* key material: the key schedule it holds is invertible back to the
+/// cipher key. It is stored in a [`Secret`], so it is scrubbed when the engine is dropped, and the
+/// [`fmt::Debug`] impl never prints it. Do not clone engines you do not need to clone.
+#[derive(Clone)]
+pub struct AES<const KEY_LEN: usize, const NR: usize, const W_WORDS: usize> {
+    /// The key schedule, `w` in FIPS 197 Section 5.2, as `4 * (Nr + 1)` big-endian words.
+    w: Secret<[u32; W_WORDS]>,
+}
+
 /// Algorithm 1 CIPHER(in, Nr, w) -> state
 fn Cipher<const Nr: usize>(input: State) -> State {
     // 2: state ← in  ▷ See Sec. 3.4
@@ -121,13 +156,18 @@ pub(crate) fn SubWord(word: u32) -> u32 {
     u32::from_le_bytes([a1, a2, a3, a0])
 }
 
-/// Eqn (5.9): AddRoundKey. [s'_(0,c), s'_(1,c), s'_(2,c), s'_(3,c)],s1,c,s2,c,s3,c]) = [s0,c,s1,c,s2,c,s3,c]⊕[w(4∗round+c)] for 0 ≤ c < 4
-pub(crate) fn AddRoundKey(state: &mut [u8; AES_BLOCK_LEN], w: &[u32; W_WORDS], round: usize) {
-    for c in 0..NB {
-        let round_key_word = w[4 * round + c].to_be_bytes();
-        state[4 * c] ^= round_key_word[0];
-        state[4 * c + 1] ^= round_key_word[1];
-        state[4 * c + 2] ^= round_key_word[2];
-        state[4 * c + 3] ^= round_key_word[3];
+impl<const KEY_LEN: usize, const NR: usize, const W_WORDS: usize> AES<KEY_LEN, NR, W_WORDS> 
+where 
+    Self: Algorithm, 
+{
+    /// Eqn (5.9): AddRoundKey. [s'_(0,c), s'_(1,c), s'_(2,c), s'_(3,c)],s1,c,s2,c,s3,c]) = [s0,c,s1,c,s2,c,s3,c]⊕[w(4∗round+c)] for 0 ≤ c < 4
+    pub(crate) fn AddRoundKey(state: &mut [u8; AES_BLOCK_LEN], w: &[u32; W_WORDS], round: usize) {
+        for c in 0..NB {
+            let round_key_word = w[4 * round + c].to_be_bytes();
+            state[4 * c] ^= round_key_word[0];
+            state[4 * c + 1] ^= round_key_word[1];
+            state[4 * c + 2] ^= round_key_word[2];
+            state[4 * c + 3] ^= round_key_word[3];
+        }
     }
 }
