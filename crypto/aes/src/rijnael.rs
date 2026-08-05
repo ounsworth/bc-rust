@@ -175,4 +175,30 @@ where
         // 13: return state  ▷ See Sec. 3.4
         *output = *state;
     }
+
+    /// Algorithm 3 INVCIPHER(in, Nr, w) -> state
+    fn inv_cipher(&self, input: &[u8; AES_BLOCK_LEN], output: &mut [u8; AES_BLOCK_LEN]) {
+        // 2: state <- in
+        let mut state = Secret::<[u8; AES_BLOCK_LEN]>::new();
+        *state = *input;
+
+        // 3: state <- ADDROUNDKEY(state, w[4*Nr .. 4*Nr+3])
+        Self::add_round_key(&mut state, &self.w, NR);
+
+        // 4: for round from Nr - 1 downto 1
+        for round in (1..NR).rev() {
+            inv_shift_rows(&mut state); // 5
+            inv_sub_bytes(&mut state); // 6
+            Self::add_round_key(&mut state, &self.w, round); // 7
+            inv_mix_columns(&mut state); // 8
+        } // 9: end for
+
+        // 10-12: the final iteration, which omits INVMIXCOLUMNS().
+        inv_shift_rows(&mut state); // 10
+        inv_sub_bytes(&mut state); // 11
+        Self::add_round_key(&mut state, &self.w, 0); // 12
+
+        // 13: return state
+        *output = *state;
+    }
 }
