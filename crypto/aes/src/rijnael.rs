@@ -154,15 +154,23 @@ where
         Self::add_round_key(&mut state, &self.w, 0);
 
         // 4: for round from 1 to Nr − 1 do
-        // 5:   state ← SubBytes(state)  ▷ See Sec. 5.1.1
-        // 6:   state ← ShiftRows(state)  ▷ See Sec. 5.1.2
-        // 7:   state ← MixColumns(state)  ▷ See Sec. 5.1.3
-        // 8:   state ← AddRoundKey(state, w[4 ∗ round .. 4 ∗ round + 3])
-        // 9: end for
+        for round in 1..NR {
+            // 5:   state ← SubBytes(state)  ▷ See Sec. 5.1.1
+            sub_bytes(&mut state);
+            // 6:   state ← ShiftRows(state)  ▷ See Sec. 5.1.2
+            shift_rows(&mut state);
+            // 7:   state ← MixColumns(state)  ▷ See Sec. 5.1.3
+            mix_columns(&mut state);
+            // 8:   state ← AddRoundKey(state, w[4 ∗ round .. 4 ∗ round + 3])
+            Self::add_round_key(&mut state, &self.w, round);
+        } // 9: end for
 
         // 10: state ← SubBytes(state)
+        sub_bytes(&mut state);
         // 11: state ← ShiftRows(state)
+        shift_rows(&mut state);
         // 12: state ← AddRoundKey(state, w[4 ∗ Nr .. 4 ∗ Nr + 3])
+        Self::add_round_key(&mut state, &self.w, NR);
 
         // 13: return state  ▷ See Sec. 3.4
         *output = *state;
