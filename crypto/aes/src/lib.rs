@@ -15,8 +15,9 @@
 
 pub mod aux_functions;
 pub mod key_schedule;
-mod state;
 mod rijnael;
+mod state;
+mod sub_bytes;
 
 /*** Exported constants ***/
 pub use state::AES_BLOCK_LEN;
