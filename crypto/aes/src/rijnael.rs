@@ -129,9 +129,9 @@ pub(crate) fn SubWord(word: u32) -> u32 {
     u32::from_le_bytes([a1, a2, a3, a0])
 }
 
-impl<const KEY_LEN: usize, const NR: usize, const W_WORDS: usize> AES<KEY_LEN, NR, W_WORDS> 
-where 
-    Self: Algorithm, 
+impl<const KEY_LEN: usize, const NR: usize, const W_WORDS: usize> AES<KEY_LEN, NR, W_WORDS>
+where
+    Self: Algorithm,
 {
     /// Eqn (5.9): AddRoundKey. [s'_(0,c), s'_(1,c), s'_(2,c), s'_(3,c)],s1,c,s2,c,s3,c]) = [s0,c,s1,c,s2,c,s3,c]⊕[w(4∗round+c)] for 0 ≤ c < 4
     pub(crate) fn add_round_key(state: &mut [u8; AES_BLOCK_LEN], w: &[u32; W_WORDS], round: usize) {
@@ -148,7 +148,7 @@ where
     fn cipher(&self, input: &[u8; AES_BLOCK_LEN], output: &mut [u8; AES_BLOCK_LEN]) {
         // 2: state ← in  ▷ See Sec. 3.4
         let mut state = Secret::<[u8; AES_BLOCK_LEN]>::new();
-        *state = *input;
+        *state = *input; // hard-copy the input data
 
         // 3: state ← AddRoundKey(state, w[0..3])  ▷ See Sec. 5.1.4
         Self::add_round_key(&mut state, &self.w, 0);
@@ -180,7 +180,7 @@ where
     fn inv_cipher(&self, input: &[u8; AES_BLOCK_LEN], output: &mut [u8; AES_BLOCK_LEN]) {
         // 2: state <- in
         let mut state = Secret::<[u8; AES_BLOCK_LEN]>::new();
-        *state = *input;
+        *state = *input; // hard-copy the input data
 
         // 3: state <- ADDROUNDKEY(state, w[4*Nr .. 4*Nr+3])
         Self::add_round_key(&mut state, &self.w, NR);

@@ -41,7 +41,7 @@ pub const AES_BLOCK_LEN: usize = 16;
 /// it at all.
 pub(crate) const NB: usize = 4;
 
-/// SUBBYTES(): applies the S-box to each byte of the state independently (FIPS 197 Section 5.1.1).
+/// SubBytes(): applies the S-box to each byte of the state independently (FIPS 197 Section 5.1.1).
 #[inline(always)]
 pub(crate) fn sub_bytes(state: &mut [u8; AES_BLOCK_LEN]) {
     for byte in state.iter_mut() {
@@ -51,7 +51,7 @@ pub(crate) fn sub_bytes(state: &mut [u8; AES_BLOCK_LEN]) {
     }
 }
 
-/// INVSUBBYTES(): the inverse of [`sub_bytes`], applying INVSBOX() to each byte
+/// InvSubBytes(): the inverse of [`sub_bytes`], applying INVSBOX() to each byte
 /// (FIPS 197 Section 5.3.2).
 #[inline(always)]
 pub(crate) fn inv_sub_bytes(state: &mut [u8; AES_BLOCK_LEN]) {
@@ -60,7 +60,7 @@ pub(crate) fn inv_sub_bytes(state: &mut [u8; AES_BLOCK_LEN]) {
     }
 }
 
-/// SHIFTROWS(): cyclically shifts row `r` of the state left by `r` bytes
+/// ShiftRows(): cyclically shifts row `r` of the state left by `r` bytes
 /// (FIPS 197 Section 5.1.2).
 ///
 /// Eq (5.5) is `s'[r, c] = s[r, (c + r) mod 4]`. Substituting the flat layout `s[r, c] ==
@@ -97,7 +97,7 @@ pub(crate) fn shift_rows(state: &mut [u8; AES_BLOCK_LEN]) {
     state[3] = row3_c3; // s'(3,0) = s(3,3)
 }
 
-/// INVSHIFTROWS(): the inverse of [`shift_rows`], cyclically shifting row `r` right by `r` bytes
+/// InvShiftRows(): the inverse of [`shift_rows`], cyclically shifting row `r` right by `r` bytes
 /// (FIPS 197 Section 5.3.1).
 ///
 /// Eq (5.12) is `s'[r, c] = s[r, (c - r) mod 4]`; in the flat layout that is a right-rotation of
@@ -129,7 +129,7 @@ pub(crate) fn inv_shift_rows(state: &mut [u8; AES_BLOCK_LEN]) {
     state[15] = row3_c0; // s'(3,3) = s(3,0)
 }
 
-/// MIXCOLUMNS(): multiplies each column of the state by the fixed matrix of Eq (5.7)
+/// MixColumns(): multiplies each column of the state by the fixed matrix of Eq (5.7)
 /// (FIPS 197 Section 5.1.3).
 ///
 /// The four output bytes of each column are Eq (5.8) transcribed literally, with the GF(2^8)
