@@ -47,7 +47,7 @@
 //! Boolean circuit. They are not meaningful AES concepts individually; they are temporary
 //! signals used to evaluate the optimized S-box circuit.
 //!
-//! # Why are the inputs `u64` if an AES S-box takes bits?
+//! # Why are the inputs `u16` if an AES S-box takes bits?
 //!
 //! This is the most important part of understanding this file.
 //!
@@ -81,87 +81,86 @@
 //!     byte 3      d7 d6 d5 d4 d3 d2 d1 d0
 //! ```
 //!
-//! A bitsliced representation conceptually transposes that matrix:
+//! A bitsliced representation conceptually transposes that matrix, one plane per bit
+//! position:
 //!
 //! ```text
-//!     u7 = [a7 b7 c7 d7]
-//!     u6 = [a6 b6 c6 d6]
-//!     u5 = [a5 b5 c5 d5]
+//!     plane for bit 7 = [a7 b7 c7 d7]
+//!     plane for bit 6 = [a6 b6 c6 d6]
+//!     plane for bit 5 = [a5 b5 c5 d5]
 //!     ...
-//!     u0 = [a0 b0 c0 d0]
+//!     plane for bit 0 = [a0 b0 c0 d0]
 //! ```
 //!
-//! This implementation uses a `u64` for every row of that transposed representation.
-//! Consequently each word has 64 independent Boolean lanes:
+//! This implementation uses a `u16` for every row of that transposed representation, one
+//! lane per byte of a single AES block. Consequently each word has 16 independent Boolean
+//! lanes:
 //!
 //! ```text
-//!                   64 independent byte positions
+//!                   16 byte positions of one AES block
 //!
-//!                   lane 63 ... lane 2 lane 1 lane 0
+//!                   lane 15 ... lane 2 lane 1 lane 0
 //!
-//!     state[0] = u7   b7       ...   b7     b7     b7
-//!     state[1] = u6   b6       ...   b6     b6     b6
-//!     state[2] = u5   b5       ...   b5     b5     b5
-//!     state[3] = u4   b4       ...   b4     b4     b4
-//!     state[4] = u3   b3       ...   b3     b3     b3
-//!     state[5] = u2   b2       ...   b2     b2     b2
-//!     state[6] = u1   b1       ...   b1     b1     b1
-//!     state[7] = u0   b0       ...   b0     b0     b0
+//!     planes[0] = u7   b0      ...   b0     b0     b0
+//!     planes[1] = u6   b1      ...   b1     b1     b1
+//!     planes[2] = u5   b2      ...   b2     b2     b2
+//!     planes[3] = u4   b3      ...   b3     b3     b3
+//!     planes[4] = u3   b4      ...   b4     b4     b4
+//!     planes[5] = u2   b5      ...   b5     b5     b5
+//!     planes[6] = u1   b6      ...   b6     b6     b6
+//!     planes[7] = u0   b7      ...   b7     b7     b7
 //!
-//!                        |                 |
-//!                        | one vertical   |
-//!                        | column is one  |
-//!                        | AES byte       |
+//!                        |                  |
+//!                        | one vertical     |
+//!                        | column is one    |
+//!                        | AES state byte   |
 //! ```
+//!
+//! **Read that middle column carefully:** `planes[0]` holds the SLP's `U7`, which is FIPS 197's
+//! `b0` -- the *least* significant bit. The two documents number bits in opposite directions,
+//! and getting it backwards silently computes a bit-reversed S-box. [`bitslice`] documents the
+//! trap in full, and the module's tests pin it.
 //!
 //! Therefore:
 //!
 //! ```text
-//!     8 u64 words
+//!     8 u16 words
 //!       = 8 bit planes
 //!
 //!     each plane
-//!       = 64 independent bits
+//!       = 16 independent bits
 //!
-//!     8 planes x 64 lanes
-//!       = 64 independent 8-bit values
-//!       = 64 bytes represented simultaneously
+//!     8 planes x 16 lanes
+//!       = 16 independent 8-bit values
+//!       = one 128-bit AES block
 //! ```
 //!
-//! The apparent size of the representation is therefore:
+//! The representation is exactly the same size as the thing it represents:
 //!
 //! ```text
-//!     8 * 64 = 512 storage bits
+//!     8 * 16 = 128 bits = 16 bytes
 //! ```
 //!
-//! but this DOES NOT mean that AES suddenly has a 512-bit block.
+//! which is precisely the AES block of FIPS 197 Table 3. A `[u16; 8]` is therefore nothing
+//! more exotic than a transposed AES state: the same 128 bits, read down the columns instead
+//! of along the rows. Lane `i` is state byte `i` in the flat layout that
+//! [`crate::state`] documents, so the bitsliced form drops straight into the byte-oriented
+//! `CIPHER()` of [`crate::rijnael`] with no change to the surrounding engine.
 //!
-//! AES's block size is still exactly:
+//! # Widening this to process several blocks at once
 //!
-//! ```text
-//!     16 bytes = 128 bits
-//! ```
+//! Nothing in the circuit below depends on the width of the word: the 113 gates are built
+//! only from `^` and `&`, with no shifts, rotates or masks. Changing `u16` to `u32` or `u64`
+//! therefore turns this into a 2-block or 4-block implementation for free, and the only edits
+//! required are the signatures, the transposition helpers, and the four all-ones constants in
+//! [`sub_bytes_nots`]. The circuit text itself would not move a character.
 //!
-//! The 512 bits here are a parallel implementation representation. When the surrounding
-//! AES implementation packs four complete AES states into one such bitsliced window,
-//! those 64 byte lanes correspond exactly to:
+//! That is a worthwhile optimization, but it is not free at the call site: a wider word only
+//! pays off if the *caller* has several blocks in hand at once, which means the mode of
+//! operation (CTR, GCM, ...) has to be written to hand them over in batches. Until then, `u16`
+//! is the honest width: it wastes no lanes on a single-block cipher.
 //!
-//! ```text
-//!     4 AES blocks
-//!       x 16 bytes per AES block
-//!       = 64 independently substituted bytes
-//! ```
-//!
-//! Thus this function can evaluate the S-box needed for the `SUBBYTES()` operations of
-//! four AES blocks in parallel.
-//!
-//! Importantly, the fact that the `[u64; 8]` representation *can* hold 64 byte lanes is
-//! intrinsic to this function. The interpretation of those lanes as four complete
-//! 16-byte AES blocks comes from the surrounding code that packs AES states into this
-//! bitsliced representation. This function itself neither knows nor cares where a lane
-//! came from: it simply computes 64 independent AES S-box evaluations.
-//!
-//! # Why a single XOR or AND performs 64 S-box gates
+//! # Why a single XOR or AND performs 16 S-box gates
 //!
 //! Consider one gate from the original straight-line program:
 //!
@@ -177,18 +176,18 @@
 //! let y14 = u3 ^ u5;
 //! ```
 //!
-//! `u3` and `u5` are `u64`s. Rust's `^` operates bit-by-bit across the whole word, so
+//! `u3` and `u5` are `u16`s. Rust's `^` operates bit-by-bit across the whole word, so
 //! this performs:
 //!
 //! ```text
 //!     y14[0]  = u3[0]  XOR u5[0]
 //!     y14[1]  = u3[1]  XOR u5[1]
 //!     ...
-//!     y14[63] = u3[63] XOR u5[63]
+//!     y14[15] = u3[15] XOR u5[15]
 //! ```
 //!
-//! In other words, ONE machine-word XOR evaluates that Boolean gate for all 64 S-box
-//! invocations simultaneously.
+//! In other words, ONE machine-word XOR evaluates that Boolean gate for all 16 S-box
+//! invocations simultaneously -- ie for every byte of the AES state at once.
 //!
 //! The same applies to AND:
 //!
@@ -201,7 +200,7 @@
 //! ```text
 //!     t2[i] = y12[i] AND y15[i]
 //!
-//!     for every lane i = 0..63 simultaneously.
+//!     for every lane i = 0..15 simultaneously.
 //! ```
 //!
 //! That is the central performance trick behind this implementation.
@@ -229,92 +228,217 @@
 //!
 //! There is no secret-selected S-box memory entry. The instruction sequence is determined
 //! by the circuit rather than by the input value. In addition, each machine instruction
-//! evaluates the corresponding Boolean gate across 64 independent lanes at once.
+//! evaluates the corresponding Boolean gate across 16 independent lanes at once.
 //!
 //! Bitslicing therefore provides two important properties:
 //!
-//! 1. **Parallelism:** one 64-bit logical operation evaluates 64 corresponding Boolean
-//!    gates simultaneously.
+//! 1. **Parallelism:** one 16-bit logical operation evaluates 16 corresponding Boolean
+//!    gates simultaneously, ie the whole state's worth of `SUBBYTES()`.
 //! 2. **Constant-pattern computation:** the S-box is evaluated as a fixed Boolean circuit
 //!    rather than through secret-dependent table indexing.
 //!
+//! The cost of those properties is real, and worth stating plainly: 113 gates plus two
+//! transpositions is slower than 16 table lookups on a machine with a warm cache. What it
+//! buys is that the memory access pattern no longer depends on the key.
+//!
 //! # Relationship between the functions in this file
 //!
-//! `sub_bytes()`
-//!     Evaluates the forward Boyar-Peralta-Calik AES S-box Boolean circuit on all 64
+//! [`sub_bytes_block`] and [`inv_sub_bytes_block`]
+//!     The entry points the rest of the crate uses. They take an ordinary
+//!     `[u8; AES_BLOCK_LEN]` AES state, transpose it into bit planes, run the circuit, and
+//!     transpose back, so the bitsliced representation never escapes this module. These are
+//!     complete, correct implementations of FIPS 197 `SUBBYTES()` and `INVSUBBYTES()`.
+//!
+//! [`bitslice`] and [`unbitslice`]
+//!     The transposition between the two representations, and each other's inverse.
+//!
+//! [`sub_bytes`]
+//!     Evaluates the forward Boyar-Peralta-Calik AES S-box Boolean circuit on all 16
 //!     bitsliced lanes simultaneously. Its eight input planes are read as `u7..u0` and
-//!     its eight resulting planes are written back as `s7..s0`.
+//!     its eight resulting planes are written back as `s7..s0`. **This is not the complete
+//!     S-box on its own** -- see [`sub_bytes_nots`].
 //!
-//! `sub_bytes_nots()`
-//!     Applies four bitwise complements associated with the Boolean formulation of the
-//!     forward S-box. A scalar Boolean NOT changes one bit; in the bitsliced
-//!     representation XOR with `0xffffffffffffffff` complements all 64 lanes of a bit
-//!     plane simultaneously. In this implementation these NOT operations are separated
-//!     from the main forward circuit so they can be accounted for elsewhere, including
-//!     by the key schedule.
+//! [`sub_bytes_nots`]
+//!     Applies the four bitwise complements omitted from [`sub_bytes`]. A scalar Boolean NOT
+//!     changes one bit; in the bitsliced representation XOR with `0xffff` complements all 16
+//!     lanes of a bit plane simultaneously. These NOT operations are kept separate from the
+//!     main forward circuit so that an implementation which can fold them into other work --
+//!     the key schedule, typically -- is free to do so.
 //!
-//! `inv_sub_bytes()`
-//!     Evaluates the inverse AES S-box circuit, again on all 64 lanes simultaneously.
-//!     Unlike the forward routine above, its comments state that the required complement
-//!     operations are accounted for inside the inverse implementation so that it is the
-//!     true inverse of the representation produced by `sub_bytes()`.
+//! [`inv_sub_bytes`]
+//!     Evaluates the inverse AES S-box circuit, again on all 16 lanes simultaneously. It is the
+//!     inverse of the bare [`sub_bytes`] circuit, so it too needs [`sub_bytes_nots`] -- applied
+//!     to its *input* rather than its output. [`inv_sub_bytes_block`] does that for you.
 //!
 //! # Important representation invariant
 //!
-//! All three functions expect exactly eight `u64` words:
+//! The plane-level functions all take exactly eight words, `[u16; 8]`.
+//!
+//! That eight is NOT saying that AES has eight state words.
+//!
+//! It is saying that a bitsliced BYTE has exactly eight bit planes:
 //!
 //! ```text
-//!     state.len() == 8
-//! ```
-//!
-//! That assertion is NOT asserting that AES has eight 64-bit state words.
-//!
-//! It is asserting that a bitsliced BYTE has exactly eight bit planes:
-//!
-//! ```text
-//!     plane 0 -> AES byte bit 7
-//!     plane 1 -> AES byte bit 6
+//!     plane 0 -> AES byte bit 0   (SLP U7 / S7)
+//!     plane 1 -> AES byte bit 1   (SLP U6 / S6)
 //!     ...
-//!     plane 7 -> AES byte bit 0
+//!     plane 7 -> AES byte bit 7   (SLP U0 / S0)
 //! ```
 //!
-//! Each plane happens to contain 64 independent lanes because the implementation uses
-//! 64-bit machine words.
+//! Each plane contains 16 lanes because one AES block contains 16 bytes. Because the plane
+//! count is part of the array type, a caller cannot get it wrong: a mis-sized array is a
+//! compile error rather than a runtime check.
+
+use crate::state::AES_BLOCK_LEN;
+
+/// The number of bit planes in the bitsliced representation: one per bit of a byte.
+///
+/// This is a property of the byte, not of AES, and it is the same whatever word width the
+/// planes use (see the module docs on widening).
+const BIT_PLANES: usize = 8;
+
+// -------------------------------------------------------------------------------------------------
+// Block-level entry points
+//
+// These are the only functions the rest of the crate calls. They keep the bitsliced
+// representation from escaping this module: a caller hands over an ordinary AES state and gets
+// back an ordinary AES state.
+// -------------------------------------------------------------------------------------------------
+
+/// SUBBYTES(): applies the AES S-box to every byte of one AES block (FIPS 197 Section 5.1.1).
+///
+/// Transposes the block into bit planes, evaluates the S-box circuit on all 16 lanes at once,
+/// and transposes the result back.
+///
+/// This is the complete transformation of FIPS 197 Table 4: unlike the bare [`sub_bytes`]
+/// circuit, it applies the four complements in [`sub_bytes_nots`] as well.
+#[inline]
+pub(crate) fn sub_bytes_block(block: &mut [u8; AES_BLOCK_LEN]) {
+    let mut planes = bitslice(block);
+
+    sub_bytes(&mut planes);
+    // The circuit leaves four outputs inverted; see `sub_bytes_nots` for why this comes after.
+    sub_bytes_nots(&mut planes);
+
+    unbitslice(&planes, block);
+}
+
+/// INVSUBBYTES(): applies the inverse AES S-box to every byte of one AES block
+/// (FIPS 197 Section 5.3.2).
+///
+/// The exact inverse of [`sub_bytes_block`].
+///
+/// Note the order: the complements come **first** here. [`inv_sub_bytes`] inverts the bare
+/// [`sub_bytes`] circuit, so undoing `sub_bytes_block` means undoing its last step first.
+/// [`sub_bytes_nots`] is its own inverse (XOR with all-ones twice is the identity), so the same
+/// function serves on both sides:
+///
+/// ```text
+/// sub_bytes_block     =  nots . circuit
+/// inv_sub_bytes_block =  (nots . circuit)^-1  =  circuit^-1 . nots^-1  =  inv_circuit . nots
+/// ```
+#[inline]
+pub(crate) fn inv_sub_bytes_block(block: &mut [u8; AES_BLOCK_LEN]) {
+    let mut planes = bitslice(block);
+
+    sub_bytes_nots(&mut planes);
+    inv_sub_bytes(&mut planes);
+
+    unbitslice(&planes, block);
+}
+
+// -------------------------------------------------------------------------------------------------
+// Transposition between the byte-oriented and bitsliced representations
+// -------------------------------------------------------------------------------------------------
+
+/// Transposes one AES block into the eight bit planes the S-box circuit operates on.
+///
+/// Plane `p` holds bit `p` of every byte, and lane `i` of each plane is byte `i` of the block:
+///
+/// ```text
+/// planes[p] bit i  =  block[i] bit p
+/// ```
+///
+/// # 🚨 The SLP numbers its bits the opposite way round to FIPS 197 🚨
+///
+/// This is the one genuinely counter-intuitive thing in this module, so it is worth being
+/// explicit. FIPS 197 Section 3.2 writes a byte as `{b7 b6 b5 b4 b3 b2 b1 b0}`, where `b7` is
+/// the **most** significant bit. `SLP_AES_113` numbers its wires the other way round: `U0` and
+/// `S0` are the most significant bit, and `U7`/`S7` are the least significant.
+///
+/// [`sub_bytes`] loads `u7` from `planes[0]`, so `planes[0]` carries the SLP's `U7`, which is
+/// FIPS 197's `b0` -- hence plane `p` holding bit `p` rather than bit `7 - p`.
+///
+/// The circuit pins this down on its own: for an all-zero input the S-box must return `{63}`
+/// (Section 5.1.1, the affine constant), and the circuit's fixed output for all-zero input is
+/// `s7 s6 s5 s4 s3 s2 s1 s0 = 1 1 0 0 0 1 1 0`. Reading that with `sN` as bit `N` gives `{c6}`;
+/// reading it with `sN` as bit `7 - N` gives `{63}`. Only the latter is the AES S-box, and
+/// `sbox_circuit_matches_documented_examples` in this module's tests keeps it that way.
+///
+/// Both loop bounds are constants and the only indexing is by loop counter, so neither the
+/// running time nor the memory access pattern depends on the (secret) block contents.
+fn bitslice(block: &[u8; AES_BLOCK_LEN]) -> [u16; BIT_PLANES] {
+    let mut planes = [0u16; BIT_PLANES];
+
+    for (lane, &byte) in block.iter().enumerate() {
+        for (p, plane) in planes.iter_mut().enumerate() {
+            let bit = (byte >> p) & 1;
+            *plane |= u16::from(bit) << lane;
+        }
+    }
+
+    planes
+}
+
+/// Transposes eight bit planes back into one AES block; the exact inverse of [`bitslice`].
+fn unbitslice(planes: &[u16; BIT_PLANES], block: &mut [u8; AES_BLOCK_LEN]) {
+    for (lane, byte) in block.iter_mut().enumerate() {
+        let mut value = 0u8;
+        for (p, &plane) in planes.iter().enumerate() {
+            let bit = ((plane >> lane) & 1) as u8;
+            value |= bit << p;
+        }
+        *byte = value;
+    }
+}
 
 // -------------------------------------------------------------------------------------------------
 // Forward AES S-box
 // -------------------------------------------------------------------------------------------------
 
-/// Applies the forward AES S-box to 64 independent byte lanes simultaneously.
+/// Applies the forward AES S-box to all 16 byte lanes of one AES block simultaneously.
 ///
 /// This is the bitsliced implementation of the AES S-box based on the
 /// Boyar-Peralta-Calik / `SLP_AES_113` Boolean circuit.
 ///
-/// `state` is NOT eight ordinary AES words. It is eight 64-bit *bit planes*:
+/// `planes` is NOT eight ordinary AES words. It is eight 16-bit *bit planes*, in the SLP's bit
+/// order (`U7` first, which is FIPS 197's `b0` -- see [`bitslice`]):
 ///
 /// ```text
-/// state[0] = bit 7 of each of the 64 byte lanes
-/// state[1] = bit 6 of each of the 64 byte lanes
+/// planes[0] = u7 = bit 0 of each of the 16 byte lanes
+/// planes[1] = u6 = bit 1 of each of the 16 byte lanes
 /// ...
-/// state[7] = bit 0 of each of the 64 byte lanes
+/// planes[7] = u0 = bit 7 of each of the 16 byte lanes
 /// ```
 ///
 /// Thus every XOR or AND below corresponds to one Boolean gate from the S-box circuit,
-/// evaluated across all 64 lanes in parallel.
+/// evaluated across all 16 lanes in parallel.
 ///
 /// See:
 /// <http://www.cs.yale.edu/homes/peralta/CircuitStuff/SLP_AES_113.txt>
 ///
-/// Note that four bitwise complement operations belonging to this formulation of the
-/// forward S-box are separated into [`sub_bytes_nots`] and are accounted for by the
-/// surrounding implementation/key schedule.
-pub(crate) fn sub_bytes(state: &mut [u64]) {
-    // The SLP operates on an 8-bit input. In bitsliced form we therefore require exactly
-    // eight bit planes. Each plane contains 64 parallel copies of one particular input bit,
-    // giving this routine capacity for 64 simultaneous S-box evaluations.
+/// # 🚨 This is not the whole S-box 🚨
+///
+/// Four bitwise complements belonging to this formulation of the forward S-box are
+/// separated out into [`sub_bytes_nots`], which must be applied to the *output* of this
+/// function to obtain the S-box of FIPS 197 Table 4. Callers who do not have a reason to
+/// keep the two apart should use [`sub_bytes_block`], which cannot be misused this way.
+pub(crate) fn sub_bytes(planes: &mut [u16; BIT_PLANES]) {
+    // The SLP operates on an 8-bit input, so in bitsliced form there are exactly eight bit
+    // planes. Each plane holds one particular input bit for all 16 bytes of the state, so
+    // this routine performs 16 simultaneous S-box evaluations -- one whole SUBBYTES().
     //
-    // This is 8 * 64 = 512 bits of REPRESENTATION, not a 512-bit AES state.
-    debug_assert_eq!(state.len(), 8);
+    // The plane count is part of the parameter type, so there is nothing to check at runtime.
 
     // This circuit was scheduled using:
     // https://github.com/Ko-/aes-armcortexm/tree/public/scheduler
@@ -330,7 +454,7 @@ pub(crate) fn sub_bytes(state: &mut [u64]) {
     // ---------------------------------------------------------------------------------------------
     // Load the eight INPUT BIT PLANES.
     //
-    // This is where the mapping from the eight `u64` state entries to the SLP inputs occurs.
+    // This is where the mapping from the eight `u16` plane entries to the SLP inputs occurs.
     //
     // In the original scalar SLP:
     //
@@ -339,25 +463,22 @@ pub(crate) fn sub_bytes(state: &mut [u64]) {
     //     ...
     //     U0 = one bit
     //
-    // Here each `uN` contains that same bit position for SIXTY-FOUR independent bytes.
+    // Here each `uN` contains that same bit position for SIXTEEN independent bytes.
     //
     // For lane i:
     //
     //     (u7[i], u6[i], ..., u0[i])
     //
-    // is one complete 8-bit input to one AES S-box.
-    //
-    // If the surrounding state-packing code has filled these 64 lanes from four AES blocks,
-    // then lanes 0..63 collectively represent 4 * 16 = 64 AES state bytes.
+    // is one complete 8-bit input to one AES S-box, namely state byte i.
     // ---------------------------------------------------------------------------------------------
-    let u7 = state[0];
-    let u6 = state[1];
-    let u5 = state[2];
-    let u4 = state[3];
-    let u3 = state[4];
-    let u2 = state[5];
-    let u1 = state[6];
-    let u0 = state[7];
+    let u7 = planes[0];
+    let u6 = planes[1];
+    let u5 = planes[2];
+    let u4 = planes[3];
+    let u3 = planes[4];
+    let u2 = planes[5];
+    let u1 = planes[6];
+    let u0 = planes[7];
 
     // ---------------------------------------------------------------------------------------------
     // Top linear transformation.
@@ -369,9 +490,9 @@ pub(crate) fn sub_bytes(state: &mut [u64]) {
     //
     //     let y14 = u3 ^ u5;
     //
-    // does NOT perform just one Boolean XOR. It performs 64 independent copies:
+    // does NOT perform just one Boolean XOR. It performs 16 independent copies:
     //
-    //     y14[i] = u3[i] XOR u5[i],  i = 0..63.
+    //     y14[i] = u3[i] XOR u5[i],  i = 0..15.
     // ---------------------------------------------------------------------------------------------
 
     let y14 = u3 ^ u5;
@@ -381,7 +502,7 @@ pub(crate) fn sub_bytes(state: &mut [u64]) {
     let y15 = t1 ^ u5;
 
     // AND is the source of non-linearity in this Boolean circuit. This one machine-word
-    // AND represents 64 parallel Boolean AND gates, one in each lane.
+    // AND represents 16 parallel Boolean AND gates, one in each lane.
     let t2 = y12 & y15;
 
     let y6 = y15 ^ u7;
@@ -569,11 +690,11 @@ pub(crate) fn sub_bytes(state: &mut [u64]) {
     // The non-linear core has now produced the information needed for the eight S-box output
     // bits. The remaining XOR network combines those intermediate signals into `s0..s7`.
     //
-    // Just like the input `u*` variables, every `s*` variable is a complete 64-lane bit plane:
+    // Just like the input `u*` variables, every `s*` variable is a complete 16-lane bit plane:
     //
     //     sN[i] = output bit N of SBOX(input byte in lane i)
     //
-    // for all 64 lanes simultaneously.
+    // for all 16 lanes simultaneously.
     // ---------------------------------------------------------------------------------------------
 
     let tc20 = z15 ^ tc16;
@@ -627,21 +748,21 @@ pub(crate) fn sub_bytes(state: &mut [u64]) {
     //
     //     (u7[i], u6[i], u5[i], u4[i], u3[i], u2[i], u1[i], u0[i]).
     //
-    // Thus all 64 byte substitutions have now occurred in parallel.
+    // Thus all 16 byte substitutions have now occurred in parallel -- modulo the four
+    // complements in `sub_bytes_nots()`, which the caller still owes.
     //
-    // The data remains bitsliced after this function returns; some surrounding operation must
-    // eventually transpose/unpack the bit planes back into the ordinary byte-oriented AES state
-    // representation when required.
+    // The data remains bitsliced after this function returns; [`unbitslice`] transposes the bit
+    // planes back into the ordinary byte-oriented AES state representation.
     // ---------------------------------------------------------------------------------------------
 
-    state[0] = s7;
-    state[1] = s6;
-    state[2] = s5;
-    state[3] = s4;
-    state[4] = s3;
-    state[5] = s2;
-    state[6] = s1;
-    state[7] = s0;
+    planes[0] = s7;
+    planes[1] = s6;
+    planes[2] = s5;
+    planes[3] = s4;
+    planes[4] = s3;
+    planes[5] = s2;
+    planes[6] = s1;
+    planes[7] = s0;
 }
 
 // -------------------------------------------------------------------------------------------------
@@ -656,49 +777,64 @@ pub(crate) fn sub_bytes(state: &mut [u64]) {
 /// bit = bit XOR 1
 /// ```
 ///
-/// Here each value is a 64-lane bit plane, so we need to invert all 64 Boolean values
+/// Here each value is a 16-lane bit plane, so we need to invert all 16 Boolean values
 /// simultaneously. XOR with:
 ///
 /// ```text
-/// 0xFFFFFFFFFFFFFFFF
+/// 0xFFFF
 /// ```
 ///
 /// means:
 ///
 /// ```text
-/// 1111111111111111111111111111111111111111111111111111111111111111
+/// 1111111111111111
 /// ```
 ///
 /// and therefore flips every lane:
 ///
 /// ```text
-/// state[N][i] = state[N][i] XOR 1
+/// planes[N][i] = planes[N][i] XOR 1
 ///
-/// for i = 0..63.
+/// for i = 0..15.
 /// ```
 ///
-/// The four affected planes correspond to the four complemented/XNOR-derived outputs in the
-/// Boolean formulation used by the forward S-box. The surrounding AES implementation may fold
-/// these complements into other work, such as the key schedule, rather than performing them
-/// directly inside [`sub_bytes`].
+/// # Why these four planes, and why afterwards
+///
+/// `SLP_AES_113` contains exactly four XNOR gates (written `#` in the straight-line program),
+/// and they are the ones that produce four of the eight outputs:
+///
+/// ```text
+/// S7 = z12  # tc18        S6 = tc10 # tc18
+/// S1 = S3   # tc16        S2 = tc26 # z17
+/// ```
+///
+/// [`sub_bytes`] implements all four as plain XOR, so those four outputs emerge inverted. The
+/// store map at the end of that function puts `s7` in plane 0, `s6` in plane 1, `s2` in plane 5
+/// and `s1` in plane 6 -- which is exactly the set of planes complemented below.
+///
+/// This is therefore an *output* correction, and must be applied after [`sub_bytes`], not
+/// before. Applying it first would complement the inputs and compute the wrong function.
+///
+/// Keeping it separate lets an implementation fold these complements into other work, such as
+/// pre-complementing the round keys in the key schedule, rather than spending four instructions
+/// per round on them.
 #[inline]
-pub(crate) fn sub_bytes_nots(state: &mut [u64]) {
+pub(crate) fn sub_bytes_nots(planes: &mut [u16; BIT_PLANES]) {
     // Again: eight entries because there are eight bit positions in each byte, not because AES
-    // has an eight-word or 512-bit state.
-    debug_assert_eq!(state.len(), 8);
+    // has an eight-word state.
 
-    // Each XOR below performs 64 Boolean NOTs simultaneously on one output bit plane.
-    state[0] ^= 0xFFFFFFFFFFFFFFFF;
-    state[1] ^= 0xFFFFFFFFFFFFFFFF;
-    state[5] ^= 0xFFFFFFFFFFFFFFFF;
-    state[6] ^= 0xFFFFFFFFFFFFFFFF;
+    // Each XOR below performs 16 Boolean NOTs simultaneously on one output bit plane.
+    planes[0] ^= 0xFFFF;
+    planes[1] ^= 0xFFFF;
+    planes[5] ^= 0xFFFF;
+    planes[6] ^= 0xFFFF;
 }
 
 // -------------------------------------------------------------------------------------------------
 // Inverse AES S-box
 // -------------------------------------------------------------------------------------------------
 
-/// Applies the inverse AES S-box to 64 independent byte lanes simultaneously.
+/// Applies the inverse AES S-box to all 16 byte lanes of one AES block simultaneously.
 ///
 /// This is the decryption-side counterpart to [`sub_bytes`]. FIPS 197's `INVSUBBYTES()`
 /// applies the inverse S-box independently to every byte of the AES state. Here that inverse
@@ -707,24 +843,26 @@ pub(crate) fn sub_bytes_nots(state: &mut [u64]) {
 /// Input representation:
 ///
 /// ```text
-/// state[0] = u7 = bit 7 from each of 64 independent bytes
-/// state[1] = u6 = bit 6 from each of 64 independent bytes
+/// planes[0] = u7 = bit 0 from each of the 16 bytes
+/// planes[1] = u6 = bit 1 from each of the 16 bytes
 /// ...
-/// state[7] = u0 = bit 0 from each of 64 independent bytes
+/// planes[7] = u0 = bit 7 from each of the 16 bytes
 /// ```
 ///
 /// Output representation is the same eight-plane arrangement.
 ///
-/// Unlike the forward `sub_bytes()` routine above, the required complement terms are accounted
-/// for inside this inverse circuit so that it implements the true inverse transformation of the
-/// forward representation.
+/// # 🚨 This is not the whole inverse S-box 🚨
+///
+/// Like the forward direction, this circuit is only half the story: it inverts the bare
+/// [`sub_bytes`] circuit, so the four complements of [`sub_bytes_nots`] have to be applied to
+/// its **input** to undo the ones the forward direction applied to its output. Use
+/// [`inv_sub_bytes_block`], which handles the ordering.
 ///
 /// As with the forward circuit, names such as `t23`, `m17`, `p26`, etc. are intermediate wires
 /// in an optimized Boolean circuit. Their names should generally remain unchanged so the
 /// implementation can be compared against its source circuit/schedule.
-pub(crate) fn inv_sub_bytes(state: &mut [u64]) {
-    // Eight bit planes, each containing 64 independent Boolean lanes.
-    debug_assert_eq!(state.len(), 8);
+pub(crate) fn inv_sub_bytes(planes: &mut [u16; BIT_PLANES]) {
+    // Eight bit planes, each containing 16 independent Boolean lanes.
 
     // Scheduled using:
     // https://github.com/Ko-/aes-armcortexm/tree/public/scheduler
@@ -741,26 +879,26 @@ pub(crate) fn inv_sub_bytes(state: &mut [u64]) {
     //
     // form one input byte to the AES inverse S-box.
     //
-    // The assignments below therefore establish 64 simultaneous inverse-S-box invocations.
+    // The assignments below therefore establish 16 simultaneous inverse-S-box invocations.
     // ---------------------------------------------------------------------------------------------
-    let u7 = state[0];
-    let u6 = state[1];
-    let u5 = state[2];
-    let u4 = state[3];
-    let u3 = state[4];
-    let u2 = state[5];
-    let u1 = state[6];
-    let u0 = state[7];
+    let u7 = planes[0];
+    let u6 = planes[1];
+    let u5 = planes[2];
+    let u4 = planes[3];
+    let u3 = planes[4];
+    let u2 = planes[5];
+    let u1 = planes[6];
+    let u0 = planes[7];
 
     // ---------------------------------------------------------------------------------------------
     // Inverse S-box Boolean network.
     //
     // As in the forward routine:
     //
-    //     ^  = 64 parallel XOR gates
-    //     &  = 64 parallel AND gates
+    //     ^  = 16 parallel XOR gates
+    //     &  = 16 parallel AND gates
     //
-    // Every intermediate value therefore remains a 64-lane bit plane.
+    // Every intermediate value therefore remains a 16-lane bit plane.
     // ---------------------------------------------------------------------------------------------
 
     let t23 = u0 ^ u3;
@@ -874,7 +1012,7 @@ pub(crate) fn inv_sub_bytes(state: &mut [u64]) {
     let m22 = m18 ^ m13;
 
     // As with the forward S-box, these ANDs form part of the non-linear core.
-    // Each individual `&` still computes 64 independent AND gates.
+    // Each individual `&` still computes 16 independent AND gates.
     let m25 = m22 & m20;
     let m26 = m21 ^ m25;
     let m10 = m9 ^ m6;
@@ -1043,16 +1181,173 @@ pub(crate) fn inv_sub_bytes(state: &mut [u64]) {
     //     input  = (u7[i] ... u0[i])
     //     output = (s7[i] ... s0[i])
     //
-    // Therefore, by the time these eight assignments complete, 64 independent inverse AES
+    // Therefore, by the time these eight assignments complete, 16 independent inverse AES
     // S-box substitutions have been performed while the state remains in bitsliced form.
     // ---------------------------------------------------------------------------------------------
 
-    state[0] = s7;
-    state[1] = s6;
-    state[2] = s5;
-    state[3] = s4;
-    state[4] = s3;
-    state[5] = s2;
-    state[6] = s1;
-    state[7] = s0;
+    planes[0] = s7;
+    planes[1] = s6;
+    planes[2] = s5;
+    planes[3] = s4;
+    planes[4] = s3;
+    planes[5] = s2;
+    planes[6] = s1;
+    planes[7] = s0;
+}
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::state::{gf_mul, gf_pow};
+
+    /// Re-derives one S-box entry from its mathematical definition, FIPS 197 Section 5.1.1.
+    ///
+    /// This is the specification that the Boolean circuit is an optimized realization of, so
+    /// deriving it independently here is what proves the circuit computes the right function.
+    /// Nothing is transcribed from Table 4, so there is no table for a typo to hide in.
+    fn sbox_from_definition(b: u8) -> u8 {
+        // Step 1, Eq (5.2): b~ = {00} if b == {00}, otherwise the multiplicative inverse of b.
+        // Eq (4.11) gives that inverse as b^254.
+        let b_tilde = if b == 0x00 { 0x00 } else { gf_pow(b, 254) };
+
+        // Step 2, Eq (5.3): b'_i = b~_i XOR b~_(i+4 mod 8) XOR b~_(i+5 mod 8)
+        //                          XOR b~_(i+6 mod 8) XOR b~_(i+7 mod 8) XOR c_i
+        // where c is the constant byte {01100011} = {63}.
+        const C: u8 = 0x63;
+        let bit = |value: u8, i: u32| (value >> (i % 8)) & 1;
+
+        let mut result = 0u8;
+        for i in 0..8u32 {
+            let b_prime_i = bit(b_tilde, i)
+                ^ bit(b_tilde, i + 4)
+                ^ bit(b_tilde, i + 5)
+                ^ bit(b_tilde, i + 6)
+                ^ bit(b_tilde, i + 7)
+                ^ bit(C, i);
+            result |= b_prime_i << i;
+        }
+        result
+    }
+
+    /// Runs one byte through [`sub_bytes_block`] by filling a whole block with it.
+    ///
+    /// Filling every lane rather than just lane 0 also checks that the circuit really does treat
+    /// the lanes independently: all 16 outputs must agree.
+    fn sbox(b: u8) -> u8 {
+        let mut block = [b; AES_BLOCK_LEN];
+        sub_bytes_block(&mut block);
+        assert!(block.iter().all(|&x| x == block[0]), "lanes disagreed for {b:#04x}");
+        block[0]
+    }
+
+    /// The same, for the inverse circuit.
+    fn inv_sbox(b: u8) -> u8 {
+        let mut block = [b; AES_BLOCK_LEN];
+        inv_sub_bytes_block(&mut block);
+        assert!(block.iter().all(|&x| x == block[0]), "lanes disagreed for {b:#04x}");
+        block[0]
+    }
+
+    /// Every one of the 256 possible input bytes must come out of the Boolean circuit equal to
+    /// the value FIPS 197 Eq (5.2) and (5.3) define.
+    ///
+    /// This is also the test that pins the ordering of [`sub_bytes_nots`] relative to
+    /// [`sub_bytes`]: getting it backwards complements the inputs instead of the outputs, which
+    /// this check would catch on the very first byte.
+    #[test]
+    fn sbox_circuit_matches_its_mathematical_definition() {
+        for b in 0..=u8::MAX {
+            assert_eq!(sbox(b), sbox_from_definition(b), "SBOX({b:#04x})");
+        }
+    }
+
+    /// Two spot checks straight out of the prose of FIPS 197.
+    #[test]
+    fn sbox_circuit_matches_documented_examples() {
+        // Section 5.1.1: "if s_rc = {53} ... so that s'_rc = {ed}".
+        assert_eq!(sbox(0x53), 0xed);
+        // Section 5.1.1: SBOX({00}) is the affine transform of {00}, ie the constant {63}.
+        assert_eq!(sbox(0x00), 0x63);
+    }
+
+    /// The inverse circuit must invert the forward one in both directions, for every byte.
+    /// Checking both directions also proves each is a bijection, ie a genuine permutation of the
+    /// 256 byte values (FIPS 197 Section 5.3.2).
+    #[test]
+    fn inv_sbox_circuit_inverts_sbox_circuit() {
+        for b in 0..=u8::MAX {
+            assert_eq!(inv_sbox(sbox(b)), b, "INVSBOX(SBOX({b:#04x}))");
+            assert_eq!(sbox(inv_sbox(b)), b, "SBOX(INVSBOX({b:#04x}))");
+        }
+    }
+
+    /// The S-box has no fixed points (SBOX(b) != b) and no "opposite" fixed points
+    /// (SBOX(b) != !b). These are design properties of Rijndael's affine constant, so they are a
+    /// cheap independent sanity check on the circuit.
+    #[test]
+    fn sbox_circuit_has_no_fixed_points() {
+        for b in 0..=u8::MAX {
+            assert_ne!(sbox(b), b, "SBOX has a fixed point at {b:#04x}");
+            assert_ne!(sbox(b), !b, "SBOX has an opposite fixed point at {b:#04x}");
+        }
+    }
+
+    /// [`sub_bytes`] on its own is deliberately *not* the S-box: four of its outputs come out
+    /// inverted. This pins that the missing piece is exactly [`sub_bytes_nots`] and nothing else,
+    /// so that an implementation which folds those complements elsewhere knows what it owes.
+    #[test]
+    fn sub_bytes_without_nots_differs_only_by_the_four_complements() {
+        for b in 0..=u8::MAX {
+            let block = [b; AES_BLOCK_LEN];
+
+            let mut raw = bitslice(&block);
+            sub_bytes(&mut raw);
+
+            let mut corrected = raw;
+            sub_bytes_nots(&mut corrected);
+
+            // Planes 0, 1, 5 and 6 are the XNOR-derived outputs s7, s6, s2 and s1.
+            for p in 0..BIT_PLANES {
+                let expected =
+                    if matches!(p, 0 | 1 | 5 | 6) { !raw[p] } else { raw[p] };
+                assert_eq!(corrected[p], expected, "plane {p} for input {b:#04x}");
+            }
+        }
+    }
+
+    /// [`bitslice`] and [`unbitslice`] must be exact inverses, and must place each byte in its
+    /// own lane. A block of 16 distinct bytes catches any lane or bit-order transposition error.
+    #[test]
+    fn bitslice_round_trips() {
+        let mut block = [0u8; AES_BLOCK_LEN];
+        for (i, byte) in block.iter_mut().enumerate() {
+            *byte = (i as u8).wrapping_mul(17).wrapping_add(1);
+        }
+
+        let planes = bitslice(&block);
+        let mut recovered = [0u8; AES_BLOCK_LEN];
+        unbitslice(&planes, &mut recovered);
+
+        assert_eq!(recovered, block);
+    }
+
+    /// The documented plane/lane mapping must hold literally: plane `p` bit `i` is bit `p` of
+    /// byte `i`. Pinning it means the surrounding code can rely on the layout, and it guards the
+    /// SLP-versus-FIPS bit-numbering trap documented on [`bitslice`].
+    #[test]
+    fn bitslice_places_bits_where_documented() {
+        let mut block = [0u8; AES_BLOCK_LEN];
+        for (i, byte) in block.iter_mut().enumerate() {
+            *byte = (i as u8).wrapping_mul(31).wrapping_add(7);
+        }
+
+        let planes = bitslice(&block);
+
+        for (i, &byte) in block.iter().enumerate() {
+            for (p, &plane) in planes.iter().enumerate() {
+                let from_plane = ((plane >> i) & 1) as u8;
+                let from_byte = (byte >> p) & 1;
+                assert_eq!(from_plane, from_byte, "plane {p}, lane {i}");
+            }
+        }
+    }
 }
