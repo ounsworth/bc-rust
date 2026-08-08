@@ -14,7 +14,7 @@
 - [ ] How to model the state `s`? It would be sweet to impl something so that you can do `s[r,c] = x` and a
   `from<[u8;16]>` and `into<[u8;16]>` so that our source code will look extremely like the sample code and Table 1.
 - [ ] impl all the functions listed in 2.2 with the API exactly as listed, function bodies of a non-trivial length
-  should be inline commented with the corresponding line(s) from the FIPS sample algs. (it doesn't need to stay this
+  should be inline commented with the corresponding line (s) from the FIPS sample algs. (it doesn't need to stay this
   way, but provides a base for later optimization)
 - [ ] There is good stuff in the nursery -- maybe it makes sense to mock out the function signatures we want, then go
   hunting for function bodies in the nursery?
@@ -36,6 +36,7 @@
 
 - [ ] De-duplicate code. Goal: reduce code review and test footprint by merging code where possible.
 - [ ] Squeeze down perf & memory footprint.
+- [ ] The parallelized SBox, can we increase it from u16 lanes to u64 lanes for more perf?
 - [ ] Read s. 6.4 and its references carefully for optimization hints.
 
 # Phase 4: Bells & Whistles

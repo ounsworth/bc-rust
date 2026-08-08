@@ -43,19 +43,19 @@ pub(crate) const NB: usize = 4;
 /// The S-box itself is not a lookup table. It is evaluated as a bitsliced Boolean circuit in
 /// [`crate::sub_bytes`], which substitutes all 16 bytes of the state in parallel and, unlike a
 /// table, never indexes memory with a secret byte. See that module for the representation and
-/// [`crate::sub_bytes::sub_bytes_block`] for the transformation itself.
+/// [`crate::sub_bytes::sub_bytes`] for the transformation itself.
 #[inline(always)]
 pub(crate) fn sub_bytes(state: &mut [u8; AES_BLOCK_LEN]) {
     // s'[r, c] = SBOX(s[r, c]). The transformation is per-byte and position-independent, so the
     // circuit's flat lane order is equivalent to the row/column form in Figure 2.
-    crate::sub_bytes::sub_bytes_block(state);
+    crate::sub_bytes::sub_bytes(state);
 }
 
 /// InvSubBytes(): the inverse of [`sub_bytes`], applying INVSBOX() to each byte
 /// (FIPS 197 Section 5.3.2).
 #[inline(always)]
 pub(crate) fn inv_sub_bytes(state: &mut [u8; AES_BLOCK_LEN]) {
-    crate::sub_bytes::inv_sub_bytes_block(state);
+    crate::sub_bytes::inv_sub_bytes(state);
 }
 
 /// ShiftRows(): cyclically shifts row `r` of the state left by `r` bytes
