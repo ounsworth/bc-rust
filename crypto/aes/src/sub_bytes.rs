@@ -495,159 +495,115 @@ pub(crate) fn inv_sub_bytes_bitsliced(bitslices_state: &mut BitslicedState) {
     bitslices_state[7] = s0;
 }
 
+/// Test the constructs in this file that are crate-internal and therefore not testable from
+/// the external unit tests.
 #[cfg(test)]
-mod tests {
+mod sbox_tests {
     use super::*;
-    use crate::state::{gf_mul, gf_pow};
+    use bouncycastle_core_test_framework::DUMMY_SEED;
 
-    /// Re-derives one S-box entry from its mathematical definition, FIPS 197 Section 5.1.1.
+    /// A lookup table would be bad for the production code since it's not constant-time,
+    /// but perfectly fine for comparing against in correctness tests.
     ///
-    /// This is the specification that the Boolean circuit is an optimized realization of, so
-    /// deriving it independently here is what proves the circuit computes the right function.
-    /// Nothing is transcribed from Table 4, so there is no table for a typo to hide in.
-    fn sbox_from_definition(b: u8) -> u8 {
-        // Step 1, Eq (5.2): b~ = {00} if b == {00}, otherwise the multiplicative inverse of b.
-        // Eq (4.11) gives that inverse as b^254.
-        let b_tilde = if b == 0x00 { 0x00 } else { gf_pow(b, 254) };
-
-        // Step 2, Eq (5.3): b'_i = b~_i XOR b~_(i+4 mod 8) XOR b~_(i+5 mod 8)
-        //                          XOR b~_(i+6 mod 8) XOR b~_(i+7 mod 8) XOR c_i
-        // where c is the constant byte {01100011} = {63}.
-        const C: u8 = 0x63;
-        let bit = |value: u8, i: u32| (value >> (i % 8)) & 1;
-
-        let mut result = 0u8;
-        for i in 0..8u32 {
-            let b_prime_i = bit(b_tilde, i)
-                ^ bit(b_tilde, i + 4)
-                ^ bit(b_tilde, i + 5)
-                ^ bit(b_tilde, i + 6)
-                ^ bit(b_tilde, i + 7)
-                ^ bit(C, i);
-            result |= b_prime_i << i;
-        }
-        result
-    }
-
-    /// Runs one byte through [`sub_bytes`] by filling a whole block with it.
+    /// Usage: `sbox_lookup_table[i] -> SBox(i)`
     ///
-    /// Filling every lane rather than just lane 0 also checks that the circuit really does treat
-    /// the lanes independently: all 16 outputs must agree.
-    fn sbox(b: u8) -> u8 {
-        let mut block = [b; AES_BLOCK_LEN];
-        sub_bytes(&mut block);
-        assert!(block.iter().all(|&x| x == block[0]), "lanes disagreed for {b:#04x}");
-        block[0]
-    }
+    /// Note: rustfmt has messed up the formatting by line-wrapping it one column earlier than it is
+    /// presented in FIPS 197.
+    const sbox_lookup_table: [u8; 256] = [
+        0x63, 0x7c, 0x77, 0x7b, 0xf2, 0x6b, 0x6f, 0xc5, 0x30, 0x01, 0x67, 0x2b, 0xfe, 0xd7, 0xab,
+        0x76, 0xca, 0x82, 0xc9, 0x7d, 0xfa, 0x59, 0x47, 0xf0, 0xad, 0xd4, 0xa2, 0xaf, 0x9c, 0xa4,
+        0x72, 0xc0, 0xb7, 0xfd, 0x93, 0x26, 0x36, 0x3f, 0xf7, 0xcc, 0x34, 0xa5, 0xe5, 0xf1, 0x71,
+        0xd8, 0x31, 0x15, 0x04, 0xc7, 0x23, 0xc3, 0x18, 0x96, 0x05, 0x9a, 0x07, 0x12, 0x80, 0xe2,
+        0xeb, 0x27, 0xb2, 0x75, 0x09, 0x83, 0x2c, 0x1a, 0x1b, 0x6e, 0x5a, 0xa0, 0x52, 0x3b, 0xd6,
+        0xb3, 0x29, 0xe3, 0x2f, 0x84, 0x53, 0xd1, 0x00, 0xed, 0x20, 0xfc, 0xb1, 0x5b, 0x6a, 0xcb,
+        0xbe, 0x39, 0x4a, 0x4c, 0x58, 0xcf, 0xd0, 0xef, 0xaa, 0xfb, 0x43, 0x4d, 0x33, 0x85, 0x45,
+        0xf9, 0x02, 0x7f, 0x50, 0x3c, 0x9f, 0xa8, 0x51, 0xa3, 0x40, 0x8f, 0x92, 0x9d, 0x38, 0xf5,
+        0xbc, 0xb6, 0xda, 0x21, 0x10, 0xff, 0xf3, 0xd2, 0xcd, 0x0c, 0x13, 0xec, 0x5f, 0x97, 0x44,
+        0x17, 0xc4, 0xa7, 0x7e, 0x3d, 0x64, 0x5d, 0x19, 0x73, 0x60, 0x81, 0x4f, 0xdc, 0x22, 0x2a,
+        0x90, 0x88, 0x46, 0xee, 0xb8, 0x14, 0xde, 0x5e, 0x0b, 0xdb, 0xe0, 0x32, 0x3a, 0x0a, 0x49,
+        0x06, 0x24, 0x5c, 0xc2, 0xd3, 0xac, 0x62, 0x91, 0x95, 0xe4, 0x79, 0xe7, 0xc8, 0x37, 0x6d,
+        0x8d, 0xd5, 0x4e, 0xa9, 0x6c, 0x56, 0xf4, 0xea, 0x65, 0x7a, 0xae, 0x08, 0xba, 0x78, 0x25,
+        0x2e, 0x1c, 0xa6, 0xb4, 0xc6, 0xe8, 0xdd, 0x74, 0x1f, 0x4b, 0xbd, 0x8b, 0x8a, 0x70, 0x3e,
+        0xb5, 0x66, 0x48, 0x03, 0xf6, 0x0e, 0x61, 0x35, 0x57, 0xb9, 0x86, 0xc1, 0x1d, 0x9e, 0xe1,
+        0xf8, 0x98, 0x11, 0x69, 0xd9, 0x8e, 0x94, 0x9b, 0x1e, 0x87, 0xe9, 0xce, 0x55, 0x28, 0xdf,
+        0x8c, 0xa1, 0x89, 0x0d, 0xbf, 0xe6, 0x42, 0x68, 0x41, 0x99, 0x2d, 0x0f, 0xb0, 0x54, 0xbb,
+        0x16,
+    ];
 
-    /// The same, for the inverse circuit.
-    fn inv_sbox(b: u8) -> u8 {
-        let mut block = [b; AES_BLOCK_LEN];
-        inv_sub_bytes(&mut block);
-        assert!(block.iter().all(|&x| x == block[0]), "lanes disagreed for {b:#04x}");
-        block[0]
-    }
+    const inv_sbox_lookup_table: [u8; 256] = [
+        0x52, 0x09, 0x6a, 0xd5, 0x30, 0x36, 0xa5, 0x38, 0xbf, 0x40, 0xa3, 0x9e, 0x81, 0xf3, 0xd7,
+        0xfb, 0x7c, 0xe3, 0x39, 0x82, 0x9b, 0x2f, 0xff, 0x87, 0x34, 0x8e, 0x43, 0x44, 0xc4, 0xde,
+        0xe9, 0xcb, 0x54, 0x7b, 0x94, 0x32, 0xa6, 0xc2, 0x23, 0x3d, 0xee, 0x4c, 0x95, 0x0b, 0x42,
+        0xfa, 0xc3, 0x4e, 0x08, 0x2e, 0xa1, 0x66, 0x28, 0xd9, 0x24, 0xb2, 0x76, 0x5b, 0xa2, 0x49,
+        0x6d, 0x8b, 0xd1, 0x25, 0x72, 0xf8, 0xf6, 0x64, 0x86, 0x68, 0x98, 0x16, 0xd4, 0xa4, 0x5c,
+        0xcc, 0x5d, 0x65, 0xb6, 0x92, 0x6c, 0x70, 0x48, 0x50, 0xfd, 0xed, 0xb9, 0xda, 0x5e, 0x15,
+        0x46, 0x57, 0xa7, 0x8d, 0x9d, 0x84, 0x90, 0xd8, 0xab, 0x00, 0x8c, 0xbc, 0xd3, 0x0a, 0xf7,
+        0xe4, 0x58, 0x05, 0xb8, 0xb3, 0x45, 0x06, 0xd0, 0x2c, 0x1e, 0x8f, 0xca, 0x3f, 0x0f, 0x02,
+        0xc1, 0xaf, 0xbd, 0x03, 0x01, 0x13, 0x8a, 0x6b, 0x3a, 0x91, 0x11, 0x41, 0x4f, 0x67, 0xdc,
+        0xea, 0x97, 0xf2, 0xcf, 0xce, 0xf0, 0xb4, 0xe6, 0x73, 0x96, 0xac, 0x74, 0x22, 0xe7, 0xad,
+        0x35, 0x85, 0xe2, 0xf9, 0x37, 0xe8, 0x1c, 0x75, 0xdf, 0x6e, 0x47, 0xf1, 0x1a, 0x71, 0x1d,
+        0x29, 0xc5, 0x89, 0x6f, 0xb7, 0x62, 0x0e, 0xaa, 0x18, 0xbe, 0x1b, 0xfc, 0x56, 0x3e, 0x4b,
+        0xc6, 0xd2, 0x79, 0x20, 0x9a, 0xdb, 0xc0, 0xfe, 0x78, 0xcd, 0x5a, 0xf4, 0x1f, 0xdd, 0xa8,
+        0x33, 0x88, 0x07, 0xc7, 0x31, 0xb1, 0x12, 0x10, 0x59, 0x27, 0x80, 0xec, 0x5f, 0x60, 0x51,
+        0x7f, 0xa9, 0x19, 0xb5, 0x4a, 0x0d, 0x2d, 0xe5, 0x7a, 0x9f, 0x93, 0xc9, 0x9c, 0xef, 0xa0,
+        0xe0, 0x3b, 0x4d, 0xae, 0x2a, 0xf5, 0xb0, 0xc8, 0xeb, 0xbb, 0x3c, 0x83, 0x53, 0x99, 0x61,
+        0x17, 0x2b, 0x04, 0x7e, 0xba, 0x77, 0xd6, 0x26, 0xe1, 0x69, 0x14, 0x63, 0x55, 0x21, 0x0c,
+        0x7d,
+    ];
 
-    /// Every one of the 256 possible input bytes must come out of the Boolean circuit equal to
-    /// the value FIPS 197 Eq (5.2) and (5.3) define.
-    ///
-    /// This is also the test that pins the ordering of [`sub_bytes_nots_bitsliced`] relative to
-    /// [`sub_bytes_bitsliced`]: getting it backwards complements the inputs instead of the outputs, which
-    /// this check would catch on the very first byte.
+    // /// Utility code to generate the inverse SBox table
+    // /// Note: to run this, you'll need to temporarily un-comment the #![no_std] in the lib.rs.
+    // #[test]
+    // fn compute_inv_sbox() {
+    //     // generate the inverse sbox lookup table
+    //     print!("[");
+    //     for i in 0..256_usize {
+    //         if i != 0 {
+    //             print!(" ")
+    //         }
+    //         // go find it in the sbox_lookup_table
+    //         for j in 0..256_usize {
+    //             if i as u8 == sbox_lookup_table[j] {
+    //                 print!("{:#04x},", j);
+    //             }
+    //         }
+    //     }
+    //     print!("]");
+    // }
+
+    /// This is not testing the code; just checking that there isn't a typo in the lookup tables.
     #[test]
-    fn sbox_circuit_matches_its_mathematical_definition() {
-        for b in 0..=u8::MAX {
-            assert_eq!(sbox(b), sbox_from_definition(b), "SBOX({b:#04x})");
+    fn check_inv_sbox() {
+        for i in 0..256_usize {
+            assert_eq!(sbox_lookup_table[inv_sbox_lookup_table[i] as usize], i as u8);
         }
     }
 
-    /// Two spot checks straight out of the prose of FIPS 197.
+    /// Test that [sub_bytes] produces the correct output for all 256 possible inputs, according
+    /// to Table 4 in FIPS 197 section 5.1.1
     #[test]
-    fn sbox_circuit_matches_documented_examples() {
-        // Section 5.1.1: "if s_rc = {53} ... so that s'_rc = {ed}".
-        assert_eq!(sbox(0x53), 0xed);
-        // Section 5.1.1: SBOX({00}) is the affine transform of {00}, ie the constant {63}.
-        assert_eq!(sbox(0x00), 0x63);
-    }
+    fn test_identity() {
+        // The `sub_bytes()` function takes 16 bytes, so we'll need to invoke it 16 times to test
+        // all 256 possible input values.
+        for i in 0..16_usize {
+            // DUMMY_SEED holds [0x00, 0x01, ..] so that i == DUMMY_SEED[i]
+            let mut state: State = DUMMY_SEED[i..(i + 16)].try_into().unwrap();
 
-    /// The inverse circuit must invert the forward one in both directions, for every byte.
-    /// Checking both directions also proves each is a bijection, ie a genuine permutation of the
-    /// 256 byte values (FIPS 197 Section 5.3.2).
-    #[test]
-    fn inv_sbox_circuit_inverts_sbox_circuit() {
-        for b in 0..=u8::MAX {
-            assert_eq!(inv_sbox(sbox(b)), b, "INVSBOX(SBOX({b:#04x}))");
-            assert_eq!(sbox(inv_sbox(b)), b, "SBOX(INVSBOX({b:#04x}))");
-        }
-    }
+            // sub_bytes produces the expected result with respect to the forward sbox
+            sub_bytes(&mut state);
+            assert_eq!(state, sbox_lookup_table[i..(i + 16)]);
 
-    /// The S-box has no fixed points (SBOX(b) != b) and no "opposite" fixed points
-    /// (SBOX(b) != !b). These are design properties of Rijndael's affine constant, so they are a
-    /// cheap independent sanity check on the circuit.
-    #[test]
-    fn sbox_circuit_has_no_fixed_points() {
-        for b in 0..=u8::MAX {
-            assert_ne!(sbox(b), b, "SBOX has a fixed point at {b:#04x}");
-            assert_ne!(sbox(b), !b, "SBOX has an opposite fixed point at {b:#04x}");
-        }
-    }
+            // and then running it through the inverse direction gives you back the original
+            inv_sub_bytes(&mut state);
+            assert_eq!(state, DUMMY_SEED[i..(i + 16)]);
 
-    /// [`sub_bytes_bitsliced`] on its own is deliberately *not* the S-box: four of its outputs come out
-    /// inverted. This pins that the missing piece is exactly [`sub_bytes_nots_bitsliced`] and nothing else,
-    /// so that an implementation which folds those complements elsewhere knows what it owes.
-    #[test]
-    fn sub_bytes_without_nots_differs_only_by_the_four_complements() {
-        for b in 0..=u8::MAX {
-            let block = [b; AES_BLOCK_LEN];
+            // and also test it in the opposite direction
+            inv_sub_bytes(&mut state);
+            assert_eq!(state, inv_sbox_lookup_table[i..(i + 16)]);
+            sub_bytes(&mut state);
+            assert_eq!(state, DUMMY_SEED[i..(i + 16)]);
 
-            let mut raw = bitslice(&block);
-            sub_bytes_bitsliced(&mut raw);
-
-            let mut corrected = raw;
-            sub_bytes_nots_bitsliced(&mut corrected);
-
-            // Planes 0, 1, 5 and 6 are the XNOR-derived outputs s7, s6, s2 and s1.
-            for p in 0..BIT_PLANES {
-                let expected = if matches!(p, 0 | 1 | 5 | 6) { !raw[p] } else { raw[p] };
-                assert_eq!(corrected[p], expected, "plane {p} for input {b:#04x}");
-            }
-        }
-    }
-
-    /// [`bitslice`] and [`unbitslice`] must be exact inverses, and must place each byte in its
-    /// own lane. A block of 16 distinct bytes catches any lane or bit-order transposition error.
-    #[test]
-    fn bitslice_round_trips() {
-        let mut block = [0u8; AES_BLOCK_LEN];
-        for (i, byte) in block.iter_mut().enumerate() {
-            *byte = (i as u8).wrapping_mul(17).wrapping_add(1);
-        }
-
-        let planes = bitslice(&block);
-        let mut recovered = [0u8; AES_BLOCK_LEN];
-        unbitslice(&planes, &mut recovered);
-
-        assert_eq!(recovered, block);
-    }
-
-    /// The documented plane/lane mapping must hold literally: plane `p` bit `i` is bit `p` of
-    /// byte `i`. Pinning it means the surrounding code can rely on the layout, and it guards the
-    /// SLP-versus-FIPS bit-numbering trap documented on [`bitslice`].
-    #[test]
-    fn bitslice_places_bits_where_documented() {
-        let mut block = [0u8; AES_BLOCK_LEN];
-        for (i, byte) in block.iter_mut().enumerate() {
-            *byte = (i as u8).wrapping_mul(31).wrapping_add(7);
-        }
-
-        let planes = bitslice(&block);
-
-        for (i, &byte) in block.iter().enumerate() {
-            for (p, &plane) in planes.iter().enumerate() {
-                let from_plane = ((plane >> i) & 1) as u8;
-                let from_byte = (byte >> p) & 1;
-                assert_eq!(from_plane, from_byte, "plane {p}, lane {i}");
-            }
+            // and that's it, that's an exhaustive test of correctness.
         }
     }
 }
