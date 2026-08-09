@@ -33,14 +33,7 @@
 //!
 //! and all functions that act on a BitslicedState are suffixed with `_bitsliced`.
 
-use crate::state::AES_BLOCK_LEN;
-
-/// The number of bit planes in the bitsliced representation: one per bit of a byte.
-///
-/// This is a property of the byte, not of AES, and it is the same whatever word width the
-/// planes use (see the module docs on widening).
-// TODO -- delete once no longer used
-const BIT_PLANES: usize = 8;
+use crate::aes::BLOCK_LEN;
 
 /// A type to mark an AES State, as described in FIPS 197 s. 3.4.
 // todo -- should this be moved to state.rs?
@@ -48,6 +41,31 @@ pub(crate) type State = [u8; 16];
 
 /// A type to mark when an AES State (`[u8; 16]`) has been transposed into its bitsliced [u16; 8] representation.
 pub(crate) type BitslicedState = [u16; 8];
+
+/// Eqn (5.11): `SubWord([a0, a1, a2, a3]) = [SBox(a0), SBox(a1), SBox(a2), SBox(a3)]`.
+/// Perform the SBox on a single 4-byte word.
+///
+/// Note: this is only used by the KeySchedule, which only operates forward,
+///       so we don't need an inv_sub_word.
+pub(crate) fn sub_word(word: u32) -> u32 {
+    // Since the implementation of sub_bytes() is based on the Boyar-Peralta-Calik `SLP_AES_113` circuit,
+    // it acts on a whole 16-byte (4-word) state and not on a single word.
+    // So, load the word we want to process into the first 4 bytes and leave the rest of the state as 0.
+    let mut state: State = [0u8; 16];
+    state[0..4].copy_from_slice(&word.to_be_bytes());
+
+    // TODO --  Optimization point:
+    //          Here we're handing sub_bytes() a state where only the first 4 bytes contain data
+    //          and the last 12 bytes are all 0's;
+    //          so the call to bitslice() will spend effort moving those 0's around.
+    //          We could get a slight perf gain on the key_schedule by implementing a
+    //          `bitslice_word()` and inv_bitslice_word() that only bitslices the first 4 bytes.
+    //          Though the perf gain is probably negligible. Do it against perf benchmarks to see the difference.
+
+    sub_bytes(&mut state);
+
+    u32::from_be_bytes(state[0..4].try_into().unwrap())
+}
 
 /// SubBytes(): applies the AES S-box to every byte of one AES block (FIPS 197 Section 5.1.1).
 ///
@@ -58,9 +76,6 @@ pub(crate) type BitslicedState = [u16; 8];
 ///
 /// `state` is both in input and output variable: the substituted state will be placed back
 ///         into the input array.
-// TODO -- unit test this function by feeding in 16 bytes of `[0x00, 0x01, 0x02, .., 0xfe, 0xff]` and make
-//         sure it comes out according to Table 4. (put those unit tests in this file since this is not
-//         a pub fn, so can't be tested from outside)
 #[inline]
 pub(crate) fn sub_bytes(state: &mut State) {
     let mut bitsliced_state = bitslice(state);
@@ -179,11 +194,14 @@ fn unbitslice(planes: &BitslicedState, block: &mut State) {
 ///         (If we do that, we'll need to leave an inline comment explaining that this differs
 ///          from SLP_AES_113.txt)
 ///
+/// TODO --  Also, I want to reserve the police light emoji for actual security considerations,
+///          like, you'll leak your private key if you don't pay attention to this, which this section is not.
+///
 /// Four bitwise complements belonging to this formulation of the forward S-box are
 /// separated out into [`sub_bytes_nots_bitsliced`], which must be applied to the *output* of this
 /// function to obtain the S-box of FIPS 197 Table 4. Callers who do not have a reason to
 /// keep the two apart should use [`sub_bytes`], which cannot be misused this way.
-pub(crate) fn sub_bytes_bitsliced(bitsliced_state: &mut BitslicedState) {
+fn sub_bytes_bitsliced(bitsliced_state: &mut BitslicedState) {
     // Load the eight input bit planes.
     // Note that the SLP circuit indexes bits inverse to FIPS 197: it uses `U7, U6, .., U0` where
     // FIPS 197 labels the same bits as `b0, b1, .., b7`.
@@ -344,7 +362,7 @@ pub(crate) fn sub_bytes_nots_bitsliced(bitsliced_state: &mut BitslicedState) {
 /// Inverse of [`sub_bytes_bitsliced`].
 ///
 /// An annotated version of this function is available in `docs/sub_bytes_annotated.txt`.
-pub(crate) fn inv_sub_bytes_bitsliced(bitslices_state: &mut BitslicedState) {
+fn inv_sub_bytes_bitsliced(bitslices_state: &mut BitslicedState) {
     // Load the eight input bit planes.
     // Note that the SLP circuit indexes bits inverse to FIPS 197: it uses `U7, U6, .., U0` where
     // FIPS 197 labels the same bits as `b0, b1, .., b7`.
@@ -573,7 +591,7 @@ mod sbox_tests {
 
     /// This is not testing the code; just checking that there isn't a typo in the lookup tables.
     #[test]
-    fn check_inv_sbox() {
+    fn check_lookup_tables() {
         for i in 0..256_usize {
             assert_eq!(sbox_lookup_table[inv_sbox_lookup_table[i] as usize], i as u8);
         }
@@ -582,7 +600,7 @@ mod sbox_tests {
     /// Test that [sub_bytes] produces the correct output for all 256 possible inputs, according
     /// to Table 4 in FIPS 197 section 5.1.1
     #[test]
-    fn test_identity() {
+    fn test_sub_bytes() {
         // The `sub_bytes()` function takes 16 bytes, so we'll need to invoke it 16 times to test
         // all 256 possible input values.
         for i in 0..16_usize {
@@ -605,5 +623,14 @@ mod sbox_tests {
 
             // and that's it, that's an exhaustive test of correctness.
         }
+    }
+
+    #[test]
+    fn test_sub_word() {
+        // Simple test that sub_word does what's expected.
+        let input = u32::from_be_bytes([0x00, 0x01, 0x02, 0x03]);
+        let expected_output = u32::from_be_bytes(sbox_lookup_table[0..4].try_into().unwrap());
+        let output = sub_word(input);
+        assert_eq!(output, expected_output);
     }
 }
