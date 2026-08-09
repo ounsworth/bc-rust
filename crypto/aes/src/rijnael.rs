@@ -1,9 +1,4 @@
-//! This file contains the core algorithms that make up the Rijndaol cipher, which are
-//! generic over the parameters `Nk` (the key length) and `Nr` (the number of rounds.
-//!
-//! The particular parametrizations and usage mades that are referred to as the Advanced Encryption Standard (AES)
-//! can be found in `aes.rs`. The code is architected this way to reduce the amount of functional code
-//! and therefore reduce the surface for testing and code review.
+use core::ops::{Index, IndexMut};
 
 use bouncycastle_core::errors::{KeyMaterialError, SymmetricCipherError};
 use bouncycastle_core::key_material::{KeyMaterial, KeyMaterialTrait, KeyType};

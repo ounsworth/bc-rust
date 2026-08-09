@@ -13,7 +13,7 @@
 #![allow(private_bounds)]
 
 mod aes;
-pub mod key_schedule;
+mod key_schedule;
 mod rijnael;
 mod sbox;
 mod state;
