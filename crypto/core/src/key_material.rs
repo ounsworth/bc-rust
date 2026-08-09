@@ -61,6 +61,8 @@ use core::fmt;
 pub type KeyMaterial0 = KeyMaterial<0>;
 /// Named type for a 128-bit (16-byte) key, for convenience.
 pub type KeyMaterial128 = KeyMaterial<16>;
+/// Named type for a 192-bit (24-byte) key, for convenience.
+pub type KeyMaterial192 = KeyMaterial<24>;
 /// Named type for a 256-bit (32-byte) key, for convenience.
 pub type KeyMaterial256 = KeyMaterial<32>;
 /// Named type for a 512-bit (64-byte) key, for convenience.

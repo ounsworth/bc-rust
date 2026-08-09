@@ -30,32 +30,28 @@
 //! Every function here takes `&mut [u8; AES_BLOCK_LEN]`, so the block length is enforced by the
 //! compiler rather than checked at runtime, and none of them can fail.
 
-/// The AES block length in bytes. Every AES variant has a 128-bit block (FIPS 197 Table 3).
-pub const AES_BLOCK_LEN: usize = 16;
+// TODO -- in the end, I suspect that most of this file will not be used and can be deleted.
 
-/// The number of columns of the state, `Nb` in FIPS 197. This Standard fixes `Nb = 4`
-/// (Section 2.3); Rijndael in general allows other values, which is why the spec keeps a name for
-/// it at all.
-pub(crate) const NB: usize = 4;
+use crate::aes::{BLOCK_LEN, Nb};
 
 /// SubBytes(): applies the S-box to each byte of the state independently (FIPS 197 Section 5.1.1).
 ///
 /// The S-box itself is not a lookup table. It is evaluated as a bitsliced Boolean circuit in
-/// [`crate::sub_bytes`], which substitutes all 16 bytes of the state in parallel and, unlike a
+/// [`crate::sbox`], which substitutes all 16 bytes of the state in parallel and, unlike a
 /// table, never indexes memory with a secret byte. See that module for the representation and
-/// [`crate::sub_bytes::sub_bytes`] for the transformation itself.
+/// [`crate::sbox::sub_bytes`] for the transformation itself.
 #[inline(always)]
-pub(crate) fn sub_bytes(state: &mut [u8; AES_BLOCK_LEN]) {
+pub(crate) fn sub_bytes(state: &mut [u8; BLOCK_LEN]) {
     // s'[r, c] = SBOX(s[r, c]). The transformation is per-byte and position-independent, so the
     // circuit's flat lane order is equivalent to the row/column form in Figure 2.
-    crate::sub_bytes::sub_bytes(state);
+    crate::sbox::sub_bytes(state);
 }
 
 /// InvSubBytes(): the inverse of [`sub_bytes`], applying INVSBOX() to each byte
 /// (FIPS 197 Section 5.3.2).
 #[inline(always)]
-pub(crate) fn inv_sub_bytes(state: &mut [u8; AES_BLOCK_LEN]) {
-    crate::sub_bytes::inv_sub_bytes(state);
+pub(crate) fn inv_sub_bytes(state: &mut [u8; BLOCK_LEN]) {
+    crate::sbox::inv_sub_bytes(state);
 }
 
 /// ShiftRows(): cyclically shifts row `r` of the state left by `r` bytes
@@ -69,7 +65,7 @@ pub(crate) fn inv_sub_bytes(state: &mut [u8; AES_BLOCK_LEN]) {
 /// Written out per row rather than as a loop over a copy of the state, so that no second copy of
 /// the state is created (see the crate docs on scrubbing intermediate state).
 #[inline(always)]
-pub(crate) fn shift_rows(state: &mut [u8; AES_BLOCK_LEN]) {
+pub(crate) fn shift_rows(state: &mut [u8; BLOCK_LEN]) {
     // Row 0 (r = 0) is unchanged, per Eq (5.5) with r = 0.
 
     // Row 1: rotate [s(1,0), s(1,1), s(1,2), s(1,3)] left by 1.
@@ -101,7 +97,7 @@ pub(crate) fn shift_rows(state: &mut [u8; AES_BLOCK_LEN]) {
 /// Eq (5.12) is `s'[r, c] = s[r, (c - r) mod 4]`; in the flat layout that is a right-rotation of
 /// each row by `r`, ie the rightward movement drawn in Figure 9.
 #[inline(always)]
-pub(crate) fn inv_shift_rows(state: &mut [u8; AES_BLOCK_LEN]) {
+pub(crate) fn inv_shift_rows(state: &mut [u8; BLOCK_LEN]) {
     // Row 0 (r = 0) is unchanged.
 
     // Row 1: rotate right by 1.
@@ -142,8 +138,8 @@ pub(crate) fn inv_shift_rows(state: &mut [u8; AES_BLOCK_LEN]) {
 ///
 /// where `.` is GF(2^8) multiplication and `+` is XOR (Section 4.1).
 #[inline(always)]
-pub(crate) fn mix_columns(state: &mut [u8; AES_BLOCK_LEN]) {
-    for c in 0..NB {
+pub(crate) fn mix_columns(state: &mut [u8; BLOCK_LEN]) {
+    for c in 0..Nb {
         // A column is contiguous in this layout: state[4c + r] == s(r, c).
         let s0 = state[4 * c];
         let s1 = state[4 * c + 1];
@@ -169,8 +165,8 @@ pub(crate) fn mix_columns(state: &mut [u8; AES_BLOCK_LEN]) {
 /// s'(3,c) = ({0b} . s(0,c)) + ({0d} . s(1,c)) + ({09} . s(2,c)) + ({0e} . s(3,c))
 /// ```
 #[inline(always)]
-pub(crate) fn inv_mix_columns(state: &mut [u8; AES_BLOCK_LEN]) {
-    for c in 0..NB {
+pub(crate) fn inv_mix_columns(state: &mut [u8; BLOCK_LEN]) {
+    for c in 0..Nb {
         let s0 = state[4 * c];
         let s1 = state[4 * c + 1];
         let s2 = state[4 * c + 2];
@@ -323,6 +319,10 @@ pub(crate) fn gf_pow(b: u8, exponent: u32) -> u8 {
     acc
 }
 
+// todo --  We generally like the tests to be lean (because they do cost CI runtime).
+//          We should investigate whether all of these tests are actually necessary (ie not duplicates of other tests)
+//          Or whether there is a more efficient way to test some of these,
+//          such whether there are KATs FIPS 197 that would allow us to test multiple of these conditions at the same time.
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -332,7 +332,7 @@ mod tests {
     /// Those files print the state as `state[0..4] state[4..8] state[8..12] state[12..16]`, each
     /// group as a big-endian hex word -- ie the four *columns* of the state in order, which is the
     /// same as the flat byte order of this implementation (see the module docs).
-    const fn state_of(w0: u32, w1: u32, w2: u32, w3: u32) -> [u8; AES_BLOCK_LEN] {
+    const fn state_of(w0: u32, w1: u32, w2: u32, w3: u32) -> [u8; BLOCK_LEN] {
         let (a, b, c, d) = (w0.to_be_bytes(), w1.to_be_bytes(), w2.to_be_bytes(), w3.to_be_bytes());
         [
             a[0], a[1], a[2], a[3], b[0], b[1], b[2], b[3], c[0], c[1], c[2], c[3], d[0], d[1],
@@ -346,24 +346,25 @@ mod tests {
      * Round 1 and round 2 are enough to pin every transformation; the remaining rounds, and the
      * AES-192/AES-256 variants, are covered end to end by the known-answer tests in
      * tests/aes_tests.rs. */
+    // todo -- Link? Where did these test vectors come from?
 
     /// Round 1 input, ie the state after the initial ADDROUNDKEY() ("KeyAddition" in the file).
-    const R1_START: [u8; AES_BLOCK_LEN] = state_of(0x40BFABF4, 0x06EE4D30, 0x42CA6B99, 0x7A5C5816);
+    const R1_START: [u8; BLOCK_LEN] = state_of(0x40BFABF4, 0x06EE4D30, 0x42CA6B99, 0x7A5C5816);
     /// Round 1 after SUBBYTES() ("Substitution").
-    const R1_SUB: [u8; AES_BLOCK_LEN] = state_of(0x090862BF, 0x6F28E304, 0x2C747FEE, 0xDA4A6A47);
+    const R1_SUB: [u8; BLOCK_LEN] = state_of(0x090862BF, 0x6F28E304, 0x2C747FEE, 0xDA4A6A47);
     /// Round 1 after SHIFTROWS() ("ShiftRow").
-    const R1_SHIFT: [u8; AES_BLOCK_LEN] = state_of(0x09287F47, 0x6F746ABF, 0x2C4A6204, 0xDA08E3EE);
+    const R1_SHIFT: [u8; BLOCK_LEN] = state_of(0x09287F47, 0x6F746ABF, 0x2C4A6204, 0xDA08E3EE);
     /// Round 1 after MIXCOLUMNS() ("MixColumn").
-    const R1_MIX: [u8; AES_BLOCK_LEN] = state_of(0x529F16C2, 0x978615CA, 0xE01AAE54, 0xBA1A2659);
+    const R1_MIX: [u8; BLOCK_LEN] = state_of(0x529F16C2, 0x978615CA, 0xE01AAE54, 0xBA1A2659);
 
     /// Round 2 input, ie the state after round 1's ADDROUNDKEY().
-    const R2_START: [u8; AES_BLOCK_LEN] = state_of(0xF265E8D5, 0x1FD2397B, 0xC3B9976D, 0x9076505C);
+    const R2_START: [u8; BLOCK_LEN] = state_of(0xF265E8D5, 0x1FD2397B, 0xC3B9976D, 0x9076505C);
     /// Round 2 after SUBBYTES().
-    const R2_SUB: [u8; AES_BLOCK_LEN] = state_of(0x894D9B03, 0xC0B51221, 0x2E56883C, 0x6038534A);
+    const R2_SUB: [u8; BLOCK_LEN] = state_of(0x894D9B03, 0xC0B51221, 0x2E56883C, 0x6038534A);
     /// Round 2 after SHIFTROWS().
-    const R2_SHIFT: [u8; AES_BLOCK_LEN] = state_of(0x89B5884A, 0xC0565303, 0x2E389B21, 0x604D123C);
+    const R2_SHIFT: [u8; BLOCK_LEN] = state_of(0x89B5884A, 0xC0565303, 0x2E389B21, 0x604D123C);
     /// Round 2 after MIXCOLUMNS().
-    const R2_MIX: [u8; AES_BLOCK_LEN] = state_of(0x0F31E929, 0x319A3558, 0xAEC95893, 0x39F04D87);
+    const R2_MIX: [u8; BLOCK_LEN] = state_of(0x0F31E929, 0x319A3558, 0xAEC95893, 0x39F04D87);
 
     #[test]
     fn sub_bytes_matches_nist_intermediate_values() {
@@ -442,8 +443,8 @@ mod tests {
     /// easily miss.
     #[test]
     fn every_transformation_round_trips() {
-        let mut states = [[0u8; AES_BLOCK_LEN]; 4];
-        states[1] = [0xFF; AES_BLOCK_LEN];
+        let mut states = [[0u8; BLOCK_LEN]; 4];
+        states[1] = [0xFF; BLOCK_LEN];
         // A state with every byte distinct catches transposition and off-by-one row errors.
         for (i, byte) in states[2].iter_mut().enumerate() {
             *byte = i as u8;
@@ -467,27 +468,27 @@ mod tests {
         }
     }
 
-    /// SHIFTROWS() must leave row 0 alone and must be a pure permutation of the other rows: it can
+    /// ShiftRows() must leave row 0 alone and must be a pure permutation of the other rows: it can
     /// neither change any byte's value nor move a byte out of its row.
     #[test]
     fn shift_rows_permutes_within_rows_only() {
-        let mut state = [0u8; AES_BLOCK_LEN];
+        let mut state = [0u8; BLOCK_LEN];
         for (i, byte) in state.iter_mut().enumerate() {
             // Encode the row in the low nibble and the column in the high nibble.
-            *byte = ((i / NB) as u8) << 4 | (i % NB) as u8;
+            *byte = ((i / Nb) as u8) << 4 | (i % Nb) as u8;
         }
         let original = state;
         shift_rows(&mut state);
 
         for r in 0..4 {
-            for c in 0..NB {
+            for c in 0..Nb {
                 let moved = state[r + 4 * c];
                 // The row index (low nibble here, since i % NB == r for index r + 4c) is preserved.
                 assert_eq!(moved & 0x0f, (r as u8) & 0x0f, "byte left its row at ({r},{c})");
             }
         }
         // Row 0 is untouched.
-        for c in 0..NB {
+        for c in 0..Nb {
             assert_eq!(state[4 * c], original[4 * c], "row 0 changed at column {c}");
         }
         // And every other row genuinely moved (r = 1, 2, 3 all have non-zero shifts).
@@ -555,12 +556,12 @@ mod tests {
         let mut baseline = R1_SHIFT;
         mix_columns(&mut baseline);
 
-        for c in 0..NB {
+        for c in 0..Nb {
             let mut perturbed = R1_SHIFT;
             perturbed[4 * c] ^= 0xFF;
             mix_columns(&mut perturbed);
 
-            for other in 0..NB {
+            for other in 0..Nb {
                 if other == c {
                     continue;
                 }
