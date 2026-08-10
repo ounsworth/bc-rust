@@ -74,6 +74,9 @@ pub struct AES_GCM<const KEY_LEN: usize, const Nr: usize> {
 // }
 
 // todo --  Other modes we could implement:
+//          * Key Wrap (KW and KWP from SP 800-38F)
+//          * CMAC (SP 800-38B / RFC4493)
+//          * GMAC (SP 800-38D / RFC9044)
 //          * AES_CTR (SP 800-38A), it's sortof a bad stream cipher, but it's possible that it's
 //            used in some protocol that could make it worthwhile to implement in bc-rust.
 //          * AES_CCM (RFC4309 / NIST SP 800-38C), it's sortof an early version of what

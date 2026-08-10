@@ -22,7 +22,7 @@
   tradeoffs that it represents, then we can decide whether to keep both or only keep one.
 - [ ] Consider side-channel implications, particularly of the sbox -- is it ok for this to be lookup-table based, or do
   we need to do something extra clever?
-- [ ] Modes: ECB, CBC, CCM, GCM. (s. 6.5)
+- [ ] Basic Modes: CBC, GCM. (s. 6.5)
 - [ ] Once working, go wrap everything in `Secret<>`.
 - [ ] Build basic unit tests as we go.
 
@@ -51,6 +51,12 @@
   appropriate for Rust) and it was introduced by popular request."
 - [ ] Compare to other crates to make sure we have all bc-rust features implemented (things like Suspendable, Algorithm,
   cli, factory, etc).
+- [ ] Other modes:
+    - Key Wrap (KW and KWP from SP 800-38F)
+    - CMAC (SP 800-38B / RFC4493)
+    - GMAC (SP 800-38D / RFC9044)
+    - CCM? This is basically a standardized version of AES_CBC+MAC, but is strictly worse than AES_GCM, what I don't
+      know is whether any protocols still use it, or if everything has moved to GCM.
 - [ ] feature `hwaccel = ["avx", "aesni"]` -- add these as cargo features, maybe utilizing a new crate
   `bouncycastle-hwaccel` which holds all the unsafe and arch-specific assembly. (some of this might already exist in the
   nursery impl).
