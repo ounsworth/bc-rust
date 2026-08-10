@@ -91,12 +91,13 @@ fn inv_cipher<const Nr: usize>(block: &mut [u8; BLOCK_LEN], w: &KeySchedule<Nr>)
 /// Eqn (5.9): AddRoundKey.
 /// `[s'_(0,c), s'_(1,c), s'_(2,c), s'_(3,c)] = [s_(0,c),s_(1,c),s_(2,c),s_(3,c)]⊕\[w_(4∗round+c)] for 0 ≤ c < 4`
 pub(crate) fn add_round_key(state: &mut [u8; BLOCK_LEN], w: &RoundKey) {
+    let [w0, w1, w2, w3] = w.to_be_bytes();
     for c in 0..Nb {
-        let [w0, w1, w2, w3] = w.to_be_bytes();
-        state[4 * c] ^= w0;
-        state[4 * c + 1] ^= w1;
-        state[4 * c + 2] ^= w2;
-        state[4 * c + 3] ^= w3;
+        // FIPS 197 s.3.4 defines the indexing of the state as `s[r,c] = s[r + 4c]`
+        state[0 + 4 * c] ^= w0;
+        state[1 + 4 * c] ^= w1;
+        state[2 + 4 * c] ^= w2;
+        state[3 + 4 * c] ^= w3;
     }
 }
 
@@ -104,4 +105,9 @@ pub(crate) fn add_round_key(state: &mut [u8; BLOCK_LEN], w: &RoundKey) {
 pub(crate) fn rot_word(word: u32) -> u32 {
     let [a0, a1, a2, a3] = word.to_be_bytes();
     u32::from_be_bytes([a1, a2, a3, a0])
+}
+
+/// Eqn (5.10): `RotWord([a0, a1, a2, a3]) = [a1, a2, a3, a0]`
+pub(crate) fn rot_word_coreys_way(word: u32) -> u32 {
+    word.rotate_left(8)
 }

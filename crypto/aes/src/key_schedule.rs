@@ -67,6 +67,11 @@ fn key_expansion<const KEY_LEN: usize, const Nroundkeys: usize>(
         // 8: temp ← w[i − 1]
         let mut temp = w[i - 1].clone();
 
+        // TODO --  these % and / operations don't matter for constant-time since they are acting
+        //          on the loop counter, which is not a secret.
+        //          But we could do some science and see if perf improves by replacing
+        //          them both with counters.
+
         // 9: if i mod Nk = 0 then
         if i % Nk == 0 {
             // 10: temp ← SubWord(RotWord(temp)) ⊕ Rcon[i/Nk]
