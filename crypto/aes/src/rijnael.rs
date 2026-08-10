@@ -92,7 +92,7 @@ fn inv_cipher<const Nr: usize>(block: &mut [u8; BLOCK_LEN], w: &KeySchedule<Nr>)
 /// `[s'_(0,c), s'_(1,c), s'_(2,c), s'_(3,c)] = [s_(0,c),s_(1,c),s_(2,c),s_(3,c)]⊕\[w_(4∗round+c)] for 0 ≤ c < 4`
 pub(crate) fn add_round_key(state: &mut [u8; BLOCK_LEN], w: &RoundKey) {
     for c in 0..Nb {
-        let [w0, w1, w2, w3] = w.to_le_bytes();
+        let [w0, w1, w2, w3] = w.to_be_bytes();
         state[4 * c] ^= w0;
         state[4 * c + 1] ^= w1;
         state[4 * c + 2] ^= w2;
