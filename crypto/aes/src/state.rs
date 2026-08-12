@@ -2,12 +2,16 @@
 //!
 //! | Function | FIPS 197 | Inverse | FIPS 197 |
 //! |----------|----------|---------|----------|
-//! | [`sub_bytes`]    | Sec 5.1.1, Eq 5.2-5.4 | [`inv_sub_bytes`]    | Sec 5.3.2 |
 //! | [`shift_rows`]   | Sec 5.1.2, Eq 5.5     | [`inv_shift_rows`]   | Sec 5.3.1, Eq 5.12 |
 //! | [`mix_columns`]  | Sec 5.1.3, Eq 5.7-5.8 | [`inv_mix_columns`]  | Sec 5.3.3, Eq 5.14-5.15 |
 //!
-//! ADDROUNDKEY() is not here because it needs the key schedule; it lives with the engine in
-//! [`crate::aes`].
+//! Two of the six do not live here:
+//! * SUBBYTES() and INVSUBBYTES() are [`crate::sbox::sub_bytes`] and
+//!   [`crate::sbox::inv_sub_bytes`]. The S-box is not a lookup table -- it is evaluated as a
+//!   bitsliced Boolean circuit, which substitutes all 16 bytes of the state at once and never
+//!   indexes memory with a secret byte. See that module.
+//! * ADDROUNDKEY() needs the key schedule, so it sits with the two Section 5 algorithms in
+//!   [`crate::rijnael::add_round_key`].
 //!
 //! # The state layout, and why it is a flat 16-byte array
 //!
@@ -27,7 +31,7 @@
 //! The tradeoff is that a *row* is strided by 4, which only SHIFTROWS() cares about; it is written
 //! out longhand below.
 //!
-//! Every function here takes `&mut [u8; AES_BLOCK_LEN]`, so the block length is enforced by the
+//! Every function here takes `&mut [u8; BLOCK_LEN]`, so the block length is enforced by the
 //! compiler rather than checked at runtime, and none of them can fail.
 
 // TODO --  I suggest moving the functions that are used into rijnael.rs and then deleting this file.
@@ -35,28 +39,6 @@
 //          tested implicitly once we have tests of cipher() and inv_cipher().
 
 use crate::aes::{BLOCK_LEN, Nb};
-
-/// SubBytes(): applies the S-box to each byte of the state independently (FIPS 197 Section 5.1.1).
-///
-/// The S-box itself is not a lookup table. It is evaluated as a bitsliced Boolean circuit in
-/// [`crate::sbox`], which substitutes all 16 bytes of the state in parallel and, unlike a
-/// table, never indexes memory with a secret byte. See that module for the representation and
-/// [`crate::sbox::sub_bytes`] for the transformation itself.
-#[inline(always)]
-// todo -- this is literally a passthrough to the other one, why is this useful?
-pub(crate) fn sub_bytes(state: &mut [u8; BLOCK_LEN]) {
-    // s'[r, c] = SBOX(s[r, c]). The transformation is per-byte and position-independent, so the
-    // circuit's flat lane order is equivalent to the row/column form in Figure 2.
-    crate::sbox::sub_bytes(state);
-}
-
-/// InvSubBytes(): the inverse of [`sub_bytes`], applying INVSBOX() to each byte
-/// (FIPS 197 Section 5.3.2).
-#[inline(always)]
-// todo -- this is literally a passthrough to the other one, why is this useful?
-pub(crate) fn inv_sub_bytes(state: &mut [u8; BLOCK_LEN]) {
-    crate::sbox::inv_sub_bytes(state);
-}
 
 /// ShiftRows(): cyclically shifts row `r` of the state left by `r` bytes
 /// (FIPS 197 Section 5.1.2).
@@ -181,31 +163,6 @@ pub(crate) fn inv_mix_columns(state: &mut [u8; BLOCK_LEN]) {
     }
 }
 
-/* *** Arithmetic in GF(2^8), FIPS 197 Section 4 ***
- *
- * Every byte of the state is an element of GF(2^8); ie the polynomial (Eq 4.1):
- *
- *     b(x) = b7*x^7 + b6*x^6 + b5*x^5 + b4*x^4 + b3*x^3 + b2*x^2 + b1*x + b0
- *
- * Addition in the field is the bitwise XOR of the two bytes (Section 4.1), which needs no
- * function. Multiplication (Section 4.2) is polynomial multiplication reduced modulo the fixed
- * polynomial (Eq 4.3):
- *
- *     m(x) = x^8 + x^4 + x^3 + x + 1
- *
- * Only the six fixed multipliers below are needed, because the cipher never performs a general
- * field multiplication: MIXCOLUMNS() multiplies only by {02} and {03} (Eq 5.6), and
- * INVMIXCOLUMNS() only by {09}, {0b}, {0d} and {0e} (Eq 5.13). Each is a short chain of
- * `xtimes()` calls plus XORs, exactly as Section 4.2 suggests ("Multiplication by higher powers
- * of x ... can be implemented by the repeated application of xTimes()").
- *
- * 🚨 Security 🚨 A general multiply would need either a data-dependent loop or a log/antilog
- * table, both of which leak the multiplicand through timing or cache state. Everything below is
- * branch-free and index-free: only shifts, XORs and masks over the input byte, so neither the
- * execution time nor the memory access pattern depends on the secret value being multiplied. */
-// todo --  I'm not convinced that we need the tutorial text above; this is info that's already contained
-//          either in FIPS 197, or in more specific comments below.
-
 /// FIPS 197 Eq (4.5) xTimes(b).
 /// Multiplies `b` by {02} in GF(2^8); ie
 ///
@@ -323,13 +280,16 @@ pub(crate) fn gf_pow(b: u8, exponent: u32) -> u8 {
     acc
 }
 
-// todo --  We generally like the tests to be lean (because they do cost CI runtime).
+// TODO --  We generally like the tests to be lean (because they do cost CI runtime).
 //          We should investigate whether all of these tests are actually necessary (ie not duplicates of other tests)
 //          Or whether there is a more efficient way to test some of these,
 //          such whether there are KATs FIPS 197 that would allow us to test multiple of these conditions at the same time.
 #[cfg(test)]
 mod tests {
     use super::*;
+    // SUBBYTES() lives in `sbox`, but the NIST intermediate values below pin the whole round, so
+    // the tests for it are here with the rest of the round.
+    use crate::sbox::{inv_sub_bytes, sub_bytes};
 
     /// Builds a state from the four 32-bit words that NIST's intermediate-value files print for it.
     ///
@@ -349,8 +309,8 @@ mod tests {
      * plaintext = 6BC1BEE2 2E409F96 E93D7E11 7393172A.
      * Round 1 and round 2 are enough to pin every transformation; the remaining rounds, and the
      * AES-192/AES-256 variants, are covered end to end by the known-answer tests in
-     * tests/aes_tests.rs. */
-    // todo -- Link? Where did these test vectors come from?
+     * tests/aes_tests.rs. 
+     * LINK OF TEST VECTORS: https://csrc.nist.gov/projects/cryptographic-standards-and-guidelines/example-values */
 
     /// Round 1 input, ie the state after the initial ADDROUNDKEY() ("KeyAddition" in the file).
     const R1_START: [u8; BLOCK_LEN] = state_of(0x40BFABF4, 0x06EE4D30, 0x42CA6B99, 0x7A5C5816);
