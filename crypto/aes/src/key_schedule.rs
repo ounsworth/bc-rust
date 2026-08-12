@@ -35,10 +35,10 @@ pub(crate) type KeySchedule<const Nroundkeys: usize> = [RoundKey; Nroundkeys];
 ///
 /// This is an internal non-pub fn so we assume that the public [KeySchedule::init] has already performed
 /// all the necessary checks on the input key.
-fn key_expansion<const KEY_LEN: usize, const Nroundkeys: usize>(
+pub(crate) fn key_expansion<const KEY_LEN: usize, const Nroundkeys: usize>(
     key: &KeyMaterial<KEY_LEN>,
 ) -> KeySchedule<Nroundkeys> {
-    // todo -- do KeyType and SecurityStrength checks on key. That'll mean returning a Result
+    // TODO -- do KeyType and SecurityStrength checks on key. That'll mean returning a Result
 
     let mut w: KeySchedule<Nroundkeys> = [const { RoundKey::new() }; Nroundkeys];
 
