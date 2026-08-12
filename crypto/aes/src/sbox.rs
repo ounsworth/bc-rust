@@ -37,7 +37,7 @@ use crate::aes::BLOCK_LEN;
 
 /// A type to mark an AES State, as described in FIPS 197 s. 3.4.
 // todo -- should this be moved to state.rs?
-pub(crate) type State = [u8; 16];
+pub(crate) type State = [u8; BLOCK_LEN];
 
 /// A type to mark when an AES State (`[u8; 16]`) has been transposed into its bitsliced [u16; 8] representation.
 pub(crate) type BitslicedState = [u16; 8];
