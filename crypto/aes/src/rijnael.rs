@@ -3,7 +3,7 @@ use bouncycastle_utils::secret::Secret;
 use crate::aes::{BLOCK_LEN, Nb};
 use crate::key_schedule::KeySchedule;
 use crate::sbox::{inv_sub_bytes, sub_bytes};
-use crate::state::{inv_mix_columns, inv_shift_rows, mix_columns, shift_rows};
+use crate::state::{self, inv_mix_columns, inv_shift_rows, mix_columns, shift_rows};
 
 /// Algorithm 1 Cipher(in, Nr, w) -> state
 ///
@@ -101,6 +101,44 @@ pub(crate) fn inv_cipher<const Nr: usize, const Nroundkeys: usize>(
 
     // 13: return state
     *block = *state;
+}
+
+/// Algorithm 4 EqInvCipher(in, Nr, dw) -> state
+/// 
+/// Transformations of round function of Alg 1 Cipher are replaced by inverses
+/// while also utilizing a modified key schedule: Algorithm 5, KeyExpansionEIC()
+pub(crate) fn eq_inv_cipher<const Nr: usize, const Nroundkeys: usize>(
+    block: &mut [u8; BLOCK_LEN], 
+    dw: &KeySchedule<Nroundkeys>,
+) {
+
+    // 2: state ← in
+    let mut state = Secret::<[u8; BLOCK_LEN]>::new();
+    *state = *block; // hard-copy the input data
+
+    // 3: state ← ADDROUNDKEY(state,dw[4 ∗Nr..4 ∗Nr +3])
+    add_round_key(&mut state, dw, Nr);
+
+    // 4: for round from `Nr - 1` down to 1
+    for round in (1..Nr).rev() {
+        // 5: state ← InvSubBytes(state)  ▷ See Sec. 5.3.2
+        inv_sub_bytes(&mut state);
+        // 6: state ← InvShiftRows(state) ▷ See Sec. 5.3.1
+        inv_shift_rows(&mut state);
+        // 7: state ← InvMixColumns(state) ▷ See Sec. 5.3.3
+        inv_mix_columns(&mut state);
+        // 8: state ← ADDROUNDKEY(state,dw[4 ∗ round..4 ∗ round +3]) ▷ See Sec. 5.1.4
+        add_round_key(&mut state, dw, round);
+    }
+
+    // 10: state ← InvSubBytes(state)
+    inv_sub_bytes(&mut state);
+    // 11: state ← InvShiftRows(state)
+    inv_shift_rows(&mut state);
+    // 12: state ← ADDROUNDKEY(state,dw[0..3])
+    add_round_key(&mut state, dw, Nr);
+
+    *block = *state;    
 }
 
 /// Eqn (5.9): AddRoundKey.
