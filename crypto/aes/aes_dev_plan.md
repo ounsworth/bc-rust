@@ -11,20 +11,37 @@
       the default mode uses the streaming version to reduce memory footprint. It might make sense for
       `struct KeySchedule` to have fn's `.next_key() -> [u8; KEY_LEN]`, and also somewhere a
       `.pre_expand() -> PreExpandedKeySchedule`.
-- [ ] How to model the state `s`? It would be sweet to impl something so that you can do `s[r,c] = x` and a
+    - STATUS: `struct AES<KEY_LEN, Nr, Nroundkeys>` + the `AES128`/`AES192`/`AES256` aliases landed, and
+      `rijndael.rs` is parametrized as described. Still outstanding: `KeySchedule` is a type alias, not a
+      `struct` -- no streaming `.next_key()` and no `.pre_expand()`, and it is not `pub use`d.
+- [x] How to model the state `s`? It would be sweet to impl something so that you can do `s[r,c] = x` and a
   `from<[u8;16]>` and `into<[u8;16]>` so that our source code will look extremely like the sample code and Table 1.
+    - Resolved, but not with an indexing type: the state is a flat `[u8; 16]` laid out in Eq (3.6) order, so
+      `state[r + 4c]` *is* `s[r, c]`, a column is a contiguous 4 bytes, and copying a block in or out is a plain
+      16-byte copy. That made the `s[r,c]` sugar and the From/Into unnecessary. See the `state.rs` module docs.
 - [ ] impl all the functions listed in 2.2 with the API exactly as listed, function bodies of a non-trivial length
   should be inline commented with the corresponding line (s) from the FIPS sample algs. (it doesn't need to stay this
   way, but provides a base for later optimization)
+    - STATUS: everything in 2.2 except `EqInvCipher()` and `KeyExpansionEIC()` (which are the next item).
 - [ ] There is good stuff in the nursery -- maybe it makes sense to mock out the function signatures we want, then go
   hunting for function bodies in the nursery?
-- [ ] Let's implement `EqInvCipher` after implementing the straightforward one so that we understand the perf-size
+- [X] Let's implement `EqInvCipher` after implementing the straightforward one so that we understand the perf-size
   tradeoffs that it represents, then we can decide whether to keep both or only keep one.
-- [ ] Consider side-channel implications, particularly of the sbox -- is it ok for this to be lookup-table based, or do
+    - STATUS: Currently implemented but not declared yet
+- [x] Consider side-channel implications, particularly of the sbox -- is it ok for this to be lookup-table based, or do
   we need to do something extra clever?
+    - Not lookup-table based: `sbox.rs` evaluates the Boyar-Peralta-Calik `SLP_AES_113` Boolean circuit over a
+      bitsliced state, so there is no secret-indexed memory access and no branching. The GF(2^8) multipliers in
+      `state.rs` are branch-free for the same reason. Still to consider under this heading when the modes land:
+      GHASH's GF(2^128) multiply has exactly the same table-lookup temptation.
 - [ ] Basic Modes: CBC, GCM. (s. 6.5)
 - [ ] Once working, go wrap everything in `Secret<>`.
-- [ ] Build basic unit tests as we go.
+    - STATUS: the round state in `cipher()`/`inv_cipher()` and every key schedule word are wrapped. The modes'
+      chaining values and GHASH state will need it too.
+- [x] Build basic unit tests as we go.
+    - FIPS 197 Appendix A.1/A.2/A.3 (key schedule), Appendix B (`cipher()`/`inv_cipher()` end to end, plus
+      `add_round_key()` on its own), and SP 800-38A F.1 known answers for all three key sizes through the public
+      engine. 28 tests, no warnings. Filling these out to lock down *all* behaviours is Phase 2.
 
 # Phase 2: Tests
 

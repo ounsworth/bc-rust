@@ -111,6 +111,7 @@ pub(crate) fn eq_inv_cipher<const Nr: usize, const Nroundkeys: usize>(
     block: &mut [u8; BLOCK_LEN], 
     dw: &KeySchedule<Nroundkeys>,
 ) {
+    debug_assert_eq!(Nroundkeys, 4 * (Nr + 1));
 
     // 2: state ← in
     let mut state = Secret::<[u8; BLOCK_LEN]>::new();
@@ -136,7 +137,7 @@ pub(crate) fn eq_inv_cipher<const Nr: usize, const Nroundkeys: usize>(
     // 11: state ← InvShiftRows(state)
     inv_shift_rows(&mut state);
     // 12: state ← ADDROUNDKEY(state,dw[0..3])
-    add_round_key(&mut state, dw, Nr);
+    add_round_key(&mut state, dw, 0);
 
     *block = *state;    
 }
