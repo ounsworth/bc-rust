@@ -1,8 +1,10 @@
 use bouncycastle_core::key_material::{KeyMaterial, KeyMaterialTrait};
 use bouncycastle_utils::secret::Secret;
 
+use crate::aes::{BLOCK_LEN, Nb};
 use crate::rijnael::*;
 use crate::sbox::sub_word;
+use crate::state::inv_mix_columns;
 
 /// A round key is defined in FIPS 197 s. 5.1.4 as four words (ie four bytes), which is represented here as a u32.
 /// This is the same for all AES sizes.
@@ -94,6 +96,111 @@ pub(crate) fn key_expansion<const KEY_LEN: usize, const Nroundkeys: usize>(
 
     // 17: return w
     w
+}
+
+/// Algorithm 5 KeyExpansionEIC(key)
+///
+/// Generates the modified key schedule `dw` that the equivalent inverse cipher
+/// (Algorithm 4, [`eq_inv_cipher`]) takes in place of `w`. COnstants inherited from super.
+///
+/// This is an internal non-pub fn so we assume that the caller has already performed all the
+/// necessary checks on the input key.
+///
+/// NOTE: `dw` has the same type as `w`, so nothing stops it being handed to [`cipher`], or `w` being
+/// handed to [`eq_inv_cipher`]. Either mistake compiles and silently produces garbage.
+#[allow(dead_code)] // Reachable only from tests until the keep-both-or-one decision is made;
+// see the EqInvCipher item in aes_dev_plan.md.
+pub(crate) fn key_expansion_eic<const KEY_LEN: usize, const Nroundkeys: usize>(
+    key: &KeyMaterial<KEY_LEN>,
+) -> KeySchedule<Nroundkeys> {
+    let mut w: KeySchedule<Nroundkeys> = [const { RoundKey::new() }; Nroundkeys];
+    let mut dw: KeySchedule<Nroundkeys> = [const { RoundKey::new() }; Nroundkeys];
+
+    // The number of u32 words in the AES key.
+    // AES-128 Nk: 4
+    // AES-192 Nk: 6
+    // AES-256 Nk: 8
+    #[allow(non_snake_case)]
+    let Nk: usize = KEY_LEN / 4;
+
+    // The number of rounds, which FIPS 197 passes in but we recover from the length of the key
+    // schedule, since Nroundkeys = 4 * (Nr + 1) (s. 5.2).
+    #[allow(non_snake_case)]
+    let Nr: usize = Nroundkeys / 4 - 1;
+    debug_assert_eq!(Nroundkeys, 4 * (Nr + 1));
+
+    // The first Nk words of the expanded key are the key itself.
+    // 2: i ← 0
+    // 3: while i ≤ Nk − 1 do
+    // 6:   i ← i + 1
+    // 7: end while ▷ When the loop concludes, i = Nk.
+    for i in 0..Nk {
+        // 4:   w[i] ← key[4i..4i + 3]
+        *w[i] = u32::from_be_bytes(key.ref_to_bytes()[i * 4..i * 4 + 4].try_into().unwrap());
+        // 5:   dw[i] ← w[i]
+        *dw[i] = *w[i];
+    }
+
+    // 8: while i ≤ 4 ∗ Nr + 3 do
+    //  Nroundkeys = 4 * (Nr + 1), computed as a global constant
+    for i in Nk..Nroundkeys {
+        // 9: temp ← w[i − 1]
+        let mut temp = w[i - 1].clone();
+
+        // 10: if i mod Nk = 0 then
+        if i % Nk == 0 {
+            // 11: temp ← SubWord(RotWord(temp)) ⊕ Rcon[i/Nk]
+            // NOTE: Deviation from the FIPS. We're indexing Rcon from 0 whereas FIPS 197 indexes from 1.
+            *temp = sub_word(rot_word(*temp)) ^ Rcon[(i / Nk) - 1];
+        }
+        // 12: else if Nk > 6 and i mod Nk = 4 then
+        //      ▷ Nk > 6 is only true for AES-256
+        else if Nk > 6 && i % Nk == 4 {
+            // 13: temp ← SubWord(temp)
+            *temp = sub_word(*temp);
+        } // 14: end if
+
+        // 15: w[i] ← w[i − Nk] ⊕ temp
+        *w[i] = *w[i - Nk] ^ *temp;
+
+        // 16: dw[i] ← w[i]
+        *dw[i] = *w[i];
+
+        // 17: i ← i + 1
+        //  Handled by for loop
+    } // 18: end while
+
+    // The first and last round keys of dw are left as they are in w; only the Nr − 1 round keys in
+    // between are transformed (see the note under Alg 5).
+    // 19: for round from 1 to Nr − 1 do
+    for round in 1..Nr {
+        // 20: i ← 4 ∗ round
+        let i = 4 * round;
+
+        // 21: dw[i..i+3] ← InvMixColumns(dw[i..i+3])  ▷ Note change of type.
+        let mut round_key = Secret::<[u8; BLOCK_LEN]>::new();
+        for c in 0..Nb {
+            let [b0, b1, b2, b3] = dw[i + c].to_be_bytes();
+            round_key[4 * c] = b0;
+            round_key[4 * c + 1] = b1;
+            round_key[4 * c + 2] = b2;
+            round_key[4 * c + 3] = b3;
+        }
+
+        inv_mix_columns(&mut round_key);
+
+        for c in 0..Nb {
+            *dw[i + c] = u32::from_be_bytes([
+                round_key[4 * c],
+                round_key[4 * c + 1],
+                round_key[4 * c + 2],
+                round_key[4 * c + 3],
+            ]);
+        }
+    } // 22: end for
+
+    // 23: return dw
+    dw
 }
 
 /// Round Constants
@@ -364,5 +471,100 @@ mod key_schedule_tests {
         for i in 0..AES256_Nroundkeys {
             assert_eq!(w[i], *key_schedule[i]);
         }
+    }
+
+    /* *** Algorithm 5 KeyExpansionEIC() *** */
+
+    /// FIPS 197 gives no worked example of `dw`, so instead of a vector this checks Algorithm 5
+    /// against its own definition, re-deriving the expected schedule from `w` independently of how
+    /// [`key_expansion_eic`] builds it:
+    ///
+    /// * lines 4-5 and 15-16: `dw` is `w`, except that
+    /// * lines 19-22: each round key from round 1 to `Nr - 1` has been through InvMixColumns(), so
+    /// * the note under Alg 5: the round 0 and round `Nr` keys are untouched.
+    fn check_eic_schedule<const KEY_LEN: usize, const Nroundkeys: usize>(
+        key: &KeyMaterial<KEY_LEN>,
+    ) {
+        #[allow(non_snake_case)]
+        let Nr: usize = Nroundkeys / 4 - 1;
+
+        let w = key_expansion::<KEY_LEN, Nroundkeys>(key);
+        let dw = key_expansion_eic::<KEY_LEN, Nroundkeys>(key);
+
+        // The first and last round keys are shared with w.
+        for c in 0..Nb {
+            assert_eq!(*dw[c], *w[c], "dw[{c}]: the first round key must be unchanged");
+            let last = 4 * Nr;
+            assert_eq!(
+                *dw[last + c],
+                *w[last + c],
+                "dw[{}]: the last round key must be unchanged",
+                last + c
+            );
+        }
+
+        // Every round key in between is InvMixColumns() of w's, computed here by packing the four
+        // words into a state by hand rather than reusing the helper logic under test.
+        for round in 1..Nr {
+            let i = 4 * round;
+
+            let mut expected = [0u8; BLOCK_LEN];
+            for c in 0..Nb {
+                let [b0, b1, b2, b3] = w[i + c].to_be_bytes();
+                expected[4 * c] = b0;
+                expected[4 * c + 1] = b1;
+                expected[4 * c + 2] = b2;
+                expected[4 * c + 3] = b3;
+            }
+            inv_mix_columns(&mut expected);
+
+            for c in 0..Nb {
+                let expected_word = u32::from_be_bytes([
+                    expected[4 * c],
+                    expected[4 * c + 1],
+                    expected[4 * c + 2],
+                    expected[4 * c + 3],
+                ]);
+                assert_eq!(*dw[i + c], expected_word, "dw[{}] (round {round})", i + c);
+            }
+        }
+
+        // Guard against the whole InvMixColumns() pass having been skipped, which the loop above
+        // would not notice if it were also skipped in the expected values.
+        assert!(
+            (4..4 * Nr).any(|j| *dw[j] != *w[j]),
+            "dw is identical to w -- the InvMixColumns() pass did nothing"
+        );
+    }
+
+    /// Algorithm 5 for a 128-bit key, over the Appendix A.1 key.
+    #[test]
+    fn eic_schedule_128() {
+        let key = KeyMaterial128::from_bytes_as_type(
+            b"\x2b\x7e\x15\x16\x28\xae\xd2\xa6\xab\xf7\x15\x88\x09\xcf\x4f\x3c",
+            KeyType::SymmetricCipherKey,
+        )
+        .unwrap();
+        check_eic_schedule::<AES128_KEY_LEN, AES128_Nroundkeys>(&key);
+    }
+
+    /// Algorithm 5 for a 192-bit key, over the Appendix A.2 key.
+    #[test]
+    fn eic_schedule_192() {
+        let key = KeyMaterial192::from_bytes_as_type(
+            b"\x8e\x73\xb0\xf7\xda\x0e\x64\x52\xc8\x10\xf3\x2b\x80\x90\x79\xe5\x62\xf8\xea\xd2\x52\x2c\x6b\x7b",
+            KeyType::SymmetricCipherKey,
+        ).unwrap();
+        check_eic_schedule::<AES192_KEY_LEN, AES192_Nroundkeys>(&key);
+    }
+
+    /// Algorithm 5 for a 256-bit key, over the Appendix A.3 key.
+    #[test]
+    fn eic_schedule_256() {
+        let key = KeyMaterial256::from_bytes_as_type(
+            b"\x60\x3d\xeb\x10\x15\xca\x71\xbe\x2b\x73\xae\xf0\x85\x7d\x77\x81\x1f\x35\x2c\x07\x3b\x61\x08\xd7\x2d\x98\x10\xa3\x09\x14\xdf\xf4",
+            KeyType::SymmetricCipherKey,
+        ).unwrap();
+        check_eic_schedule::<AES256_KEY_LEN, AES256_Nroundkeys>(&key);
     }
 }
