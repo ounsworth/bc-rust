@@ -309,7 +309,7 @@ mod tests {
      * plaintext = 6BC1BEE2 2E409F96 E93D7E11 7393172A.
      * Round 1 and round 2 are enough to pin every transformation; the remaining rounds, and the
      * AES-192/AES-256 variants, are covered end to end by the known-answer tests in
-     * tests/aes_tests.rs. 
+     * tests/aes_tests.rs.
      * LINK OF TEST VECTORS: https://csrc.nist.gov/projects/cryptographic-standards-and-guidelines/example-values */
 
     /// Round 1 input, ie the state after the initial ADDROUNDKEY() ("KeyAddition" in the file).
