@@ -46,6 +46,7 @@
 # Phase 2: Tests
 
 - [ ] Fill out unit tests to lock down all behaviours. `cargo mutants` is very helpful at telling you when you're done.
+  - STATUS: In progress with aes_tests.rs
 - [ ] bc-test-data and wycheproof
 - [ ] Create perf and mem benches
 

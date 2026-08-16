@@ -1,3 +1,5 @@
+use core::ops::Index;
+
 use bouncycastle_core::key_material::{KeyMaterial, KeyMaterialTrait};
 use bouncycastle_utils::secret::Secret;
 
@@ -11,7 +13,7 @@ use crate::state::inv_mix_columns;
 /// A type alias is defined to disambiguate round keys from other u32 data types.
 pub(crate) type RoundKey = Secret<u32>;
 
-/// The AES key schedule is expanded from the main key.
+/// The AES key schedule `w`, expanded from the main key by [`key_expansion`] (FIPS 197 Alg 2).
 /// It consists of Nr round keys each of which is a 4-byte word (represented here as a [`RoundKey`],
 /// which is simply a type alias for a u32.
 ///
@@ -19,10 +21,58 @@ pub(crate) type RoundKey = Secret<u32>;
 /// * AES-128: Nr=10, Nroundkeys = 4*(Nr + 1) = 44 words = 176 bytes.
 /// * AES-192: Nr=12, Nroundkeys = 4*(Nr + 1) = 52 words = 208 bytes.
 /// * AES-256: Nr=14, Nroundkeys = 4*(Nr + 1) = 60 words = 240 bytes.
+///
+/// This is a newtype rather than a bare array so that it cannot be confused with
+/// [`KeyScheduleEIC`]; see that type for why. The inner array is private to this module, so the only
+/// way to obtain one is [`key_expansion`].
 // Dev Note: ugg, this would be so easy if generic_const_exprs was on rust main,
 //           cause then we'd size this as `KeySchedule<const Nr: usize> = [RoundKey; 4*(Nr + 1)];`
 //           instead of having to carry another param.
-pub(crate) type KeySchedule<const Nroundkeys: usize> = [RoundKey; Nroundkeys];
+pub(crate) struct KeySchedule<const Nroundkeys: usize>([RoundKey; Nroundkeys]);
+
+/// The modified key schedule `dw`, expanded from the main key by [`key_expansion_eic`]
+/// (FIPS 197 Alg 5), and taken by the equivalent inverse cipher [`eq_inv_cipher`] (Alg 4) in place
+/// of `w`.
+///
+/// Identical in layout to [`KeySchedule`] -- both are `Nroundkeys` words -- but a distinct type, so
+/// that the two can never be swapped by mistake. Handing `dw` to [`cipher`] or `w` to
+/// [`eq_inv_cipher`] would produce silent garbage rather than an error; as separate types, neither
+/// compiles. Both inner arrays are private to this module, so the only way to obtain either schedule
+/// is the expansion routine that produces it, and there is no conversion between them.
+pub(crate) struct KeyScheduleEIC<const Nroundkeys: usize>([RoundKey; Nroundkeys]);
+
+impl<const Nroundkeys: usize> KeySchedule<Nroundkeys> {
+    /// The schedule as a flat array of words, for [`add_round_key`], which is indifferent to which
+    /// of the two schedules it is XOR-ing in.
+    pub(crate) fn words(&self) -> &[RoundKey; Nroundkeys] {
+        &self.0
+    }
+}
+
+impl<const Nroundkeys: usize> KeyScheduleEIC<Nroundkeys> {
+    /// The schedule as a flat array of words. See [`KeySchedule::words`].
+    pub(crate) fn words(&self) -> &[RoundKey; Nroundkeys] {
+        &self.0
+    }
+}
+
+// Read-only indexing: `w[i]` is the i'th word. There is deliberately no IndexMut -- a key schedule is
+// fully determined by the key, so nothing should be writing into one after expansion.
+impl<const Nroundkeys: usize> Index<usize> for KeySchedule<Nroundkeys> {
+    type Output = RoundKey;
+
+    fn index(&self, i: usize) -> &RoundKey {
+        &self.0[i]
+    }
+}
+
+impl<const Nroundkeys: usize> Index<usize> for KeyScheduleEIC<Nroundkeys> {
+    type Output = RoundKey;
+
+    fn index(&self, i: usize) -> &RoundKey {
+        &self.0[i]
+    }
+}
 
 /// Algorithm 2 KeyExpansion(key)
 ///
@@ -42,7 +92,9 @@ pub(crate) fn key_expansion<const KEY_LEN: usize, const Nroundkeys: usize>(
 ) -> KeySchedule<Nroundkeys> {
     // TODO -- do KeyType and SecurityStrength checks on key. That'll mean returning a Result
 
-    let mut w: KeySchedule<Nroundkeys> = [const { RoundKey::new() }; Nroundkeys];
+    //  Built as a bare array and wrapped in the [`KeySchedule`] newtype on the way out at line 17,
+    //  so that the recurrence below reads as it does in the FIPS.
+    let mut w: [RoundKey; Nroundkeys] = [const { RoundKey::new() }; Nroundkeys];
 
     // The number of u32 words in the AES key.
     // AES-128 Nk: 4
@@ -95,7 +147,7 @@ pub(crate) fn key_expansion<const KEY_LEN: usize, const Nroundkeys: usize>(
     } // 16: end while
 
     // 17: return w
-    w
+    KeySchedule(w)
 }
 
 /// Algorithm 5 KeyExpansionEIC(key)
@@ -106,15 +158,18 @@ pub(crate) fn key_expansion<const KEY_LEN: usize, const Nroundkeys: usize>(
 /// This is an internal non-pub fn so we assume that the caller has already performed all the
 /// necessary checks on the input key.
 ///
-/// NOTE: `dw` has the same type as `w`, so nothing stops it being handed to [`cipher`], or `w` being
-/// handed to [`eq_inv_cipher`]. Either mistake compiles and silently produces garbage.
+/// `dw` is returned as a [`KeyScheduleEIC`], which is a distinct type from the [`KeySchedule`] that
+/// [`key_expansion`] returns, so that handing the wrong schedule to [`cipher`] or [`eq_inv_cipher`]
+/// is a compile error rather than silent garbage.
 #[allow(dead_code)] // Reachable only from tests until the keep-both-or-one decision is made;
 // see the EqInvCipher item in aes_dev_plan.md.
 pub(crate) fn key_expansion_eic<const KEY_LEN: usize, const Nroundkeys: usize>(
     key: &KeyMaterial<KEY_LEN>,
-) -> KeySchedule<Nroundkeys> {
-    let mut w: KeySchedule<Nroundkeys> = [const { RoundKey::new() }; Nroundkeys];
-    let mut dw: KeySchedule<Nroundkeys> = [const { RoundKey::new() }; Nroundkeys];
+) -> KeyScheduleEIC<Nroundkeys> {
+    //  Both are bare arrays here and dw is wrapped in its newtype on the way out at line 23, so that
+    //  the transcription below reads as it does in the FIPS.
+    let mut w: [RoundKey; Nroundkeys] = [const { RoundKey::new() }; Nroundkeys];
+    let mut dw: [RoundKey; Nroundkeys] = [const { RoundKey::new() }; Nroundkeys];
 
     // The number of u32 words in the AES key.
     // AES-128 Nk: 4
@@ -200,7 +255,7 @@ pub(crate) fn key_expansion_eic<const KEY_LEN: usize, const Nroundkeys: usize>(
     } // 22: end for
 
     // 23: return dw
-    dw
+    KeyScheduleEIC(dw)
 }
 
 /// Round Constants

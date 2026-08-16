@@ -1,7 +1,7 @@
 use bouncycastle_utils::secret::Secret;
 
 use crate::aes::{BLOCK_LEN, Nb};
-use crate::key_schedule::KeySchedule;
+use crate::key_schedule::{KeySchedule, KeyScheduleEIC, RoundKey};
 use crate::sbox::{inv_sub_bytes, sub_bytes};
 use crate::state::{inv_mix_columns, inv_shift_rows, mix_columns, shift_rows};
 
@@ -37,7 +37,7 @@ pub(crate) fn cipher<const Nr: usize, const Nroundkeys: usize>(
     //          so we should do that change carefully with a before-and-after benchmark.
 
     // 3: state ← AddRoundKey(state, w[0..3])  ▷ See Sec. 5.1.4
-    add_round_key(&mut state, w, 0);
+    add_round_key(&mut state, w.words(), 0);
 
     // 4: for round from 1 to Nr − 1 do
     for round in 1..Nr {
@@ -48,7 +48,7 @@ pub(crate) fn cipher<const Nr: usize, const Nroundkeys: usize>(
         // 7:   state ← MixColumns(state)  ▷ See Sec. 5.1.3
         mix_columns(&mut state);
         // 8:   state ← AddRoundKey(state, w[4 ∗ round .. 4 ∗ round + 3])
-        add_round_key(&mut state, w, round);
+        add_round_key(&mut state, w.words(), round);
     } // 9: end for
 
     // 10-12: the final iteration, which omits MixColumns().
@@ -57,7 +57,7 @@ pub(crate) fn cipher<const Nr: usize, const Nroundkeys: usize>(
     // 11: state ← ShiftRows(state)
     shift_rows(&mut state);
     // 12: state ← AddRoundKey(state, w[4 ∗ Nr .. 4 ∗ Nr + 3])
-    add_round_key(&mut state, w, Nr);
+    add_round_key(&mut state, w.words(), Nr);
 
     // 13: return state  ▷ See Sec. 3.4
     *block = *state;
@@ -77,7 +77,7 @@ pub(crate) fn inv_cipher<const Nr: usize, const Nroundkeys: usize>(
     *state = *block; // hard-copy the input data
 
     // 3: state <- AddRoundKey(state, w[4*Nr .. 4*Nr+3])
-    add_round_key(&mut state, w, Nr);
+    add_round_key(&mut state, w.words(), Nr);
 
     // 4: for round from `Nr - 1` down to 1
     for round in (1..Nr).rev() {
@@ -86,7 +86,7 @@ pub(crate) fn inv_cipher<const Nr: usize, const Nroundkeys: usize>(
         // 6: state ← InvSubBytes(state)  ▷ See Sec. 5.3.2
         inv_sub_bytes(&mut state);
         // 7: state ← AddRoundKey(state, w[4 ∗ round..4 ∗ round + 3])
-        add_round_key(&mut state, w, round);
+        add_round_key(&mut state, w.words(), round);
         // 8: state ← InvMixColumns(state)  ▷ See Sec. 5.3.3
         inv_mix_columns(&mut state);
     } // 9: end for
@@ -97,7 +97,7 @@ pub(crate) fn inv_cipher<const Nr: usize, const Nroundkeys: usize>(
     // 11: state ← InvSubBytes(state)
     inv_sub_bytes(&mut state);
     // 12: state ← AddRoundKey(state, w[0..3])
-    add_round_key(&mut state, w, 0);
+    add_round_key(&mut state, w.words(), 0);
 
     // 13: return state
     *block = *state;
@@ -108,15 +108,16 @@ pub(crate) fn inv_cipher<const Nr: usize, const Nroundkeys: usize>(
 /// Transformations of round function of Alg 1 Cipher are replaced by inverses
 /// while also utilizing a modified key schedule: Algorithm 5, KeyExpansionEIC()
 ///
-/// `dw` must come from [`crate::key_schedule::key_expansion_eic`], **not** from
-/// [`crate::key_schedule::key_expansion`]: both produce the same [`KeySchedule`] type, so passing the
-/// wrong one compiles and silently decrypts to garbage.
+/// `dw` is a [`KeyScheduleEIC`], which only [`crate::key_schedule::key_expansion_eic`] can produce.
+/// That is what stops the `w` from [`crate::key_schedule::key_expansion`] being passed here (or a
+/// `dw` being passed to [`cipher`]): the two schedules have the same shape and would decrypt to
+/// silent garbage if swapped, so they are separate types and the swap does not compile.
 #[allow(dead_code)] // Not wired into the engine yet: see the EqInvCipher item in aes_dev_plan.md,
 // which calls for measuring the perf/size tradeoff against inv_cipher() before deciding whether to
-// keep both or only one. Exercised by the tests below in the meantime.
+// keep both or only one. Exercised by the tests at the bottom of this file in the meantime.
 pub(crate) fn eq_inv_cipher<const Nr: usize, const Nroundkeys: usize>(
     block: &mut [u8; BLOCK_LEN],
-    dw: &KeySchedule<Nroundkeys>,
+    dw: &KeyScheduleEIC<Nroundkeys>,
 ) {
     debug_assert_eq!(Nroundkeys, 4 * (Nr + 1));
 
@@ -125,7 +126,7 @@ pub(crate) fn eq_inv_cipher<const Nr: usize, const Nroundkeys: usize>(
     *state = *block; // hard-copy the input data
 
     // 3: state ← ADDROUNDKEY(state,dw[4 ∗Nr..4 ∗Nr +3])
-    add_round_key(&mut state, dw, Nr);
+    add_round_key(&mut state, dw.words(), Nr);
 
     // 4: for round from `Nr - 1` down to 1
     for round in (1..Nr).rev() {
@@ -136,7 +137,7 @@ pub(crate) fn eq_inv_cipher<const Nr: usize, const Nroundkeys: usize>(
         // 7: state ← InvMixColumns(state) ▷ See Sec. 5.3.3
         inv_mix_columns(&mut state);
         // 8: state ← ADDROUNDKEY(state,dw[4 ∗ round..4 ∗ round +3]) ▷ See Sec. 5.1.4
-        add_round_key(&mut state, dw, round);
+        add_round_key(&mut state, dw.words(), round);
     }
 
     // 10: state ← InvSubBytes(state)
@@ -144,7 +145,7 @@ pub(crate) fn eq_inv_cipher<const Nr: usize, const Nroundkeys: usize>(
     // 11: state ← InvShiftRows(state)
     inv_shift_rows(&mut state);
     // 12: state ← ADDROUNDKEY(state,dw[0..3])
-    add_round_key(&mut state, dw, 0);
+    add_round_key(&mut state, dw.words(), 0);
 
     *block = *state;
 }
@@ -157,9 +158,15 @@ pub(crate) fn eq_inv_cipher<const Nr: usize, const Nroundkeys: usize>(
 ///
 /// `round` runs over `0 ..= Nr` and the schedule holds `4 * (Nr + 1)` words (Sec 5.2), so
 /// `4 * round + c` is always in bounds.
+///
+/// Takes the schedule's words rather than a schedule, because this transformation is the one thing
+/// that genuinely does not care which of the two it is given: it XORs whatever round key it is
+/// handed. Keeping the [`KeySchedule`] / [`KeyScheduleEIC`] distinction at the level of the
+/// algorithms that must not be confused -- [`cipher`] and [`eq_inv_cipher`] -- is what makes the
+/// mismatch impossible without making this function generic over both.
 pub(crate) fn add_round_key<const Nroundkeys: usize>(
     state: &mut [u8; BLOCK_LEN],
-    w: &KeySchedule<Nroundkeys>,
+    w: &[RoundKey; Nroundkeys],
     round: usize,
 ) {
     for c in 0..Nb {
@@ -271,11 +278,11 @@ mod rijndael_tests {
         // Round 0 is the initial AddRoundKey() of Algorithm 1 line 3, which XORs w[0..4] -- ie the
         // key itself -- into the plaintext.
         let mut state = APPDX_B_PLAINTEXT;
-        add_round_key(&mut state, &w, 0);
+        add_round_key(&mut state, w.words(), 0);
         assert_eq!(state, APPDX_B_ROUND1_START);
 
         // AddRoundKey() is its own inverse (Sec 5.3.4).
-        add_round_key(&mut state, &w, 0);
+        add_round_key(&mut state, w.words(), 0);
         assert_eq!(state, APPDX_B_PLAINTEXT);
     }
 
@@ -308,15 +315,10 @@ mod rijndael_tests {
         assert_eq!(&via_eq_inv_cipher, plaintext, "EqInvCipher() (Algorithm 4)");
         assert_eq!(via_eq_inv_cipher, via_inv_cipher, "Algorithms 3 and 4 must agree");
 
-        // Handing EqInvCipher() the *unmodified* schedule must not work, since that is the mistake
-        // the type system cannot catch (see the warning on `eq_inv_cipher`). Nr > 1 for every AES
-        // variant, so there is always at least one round key that dw transforms.
-        let mut with_wrong_schedule = ciphertext;
-        eq_inv_cipher::<Nr, Nroundkeys>(&mut with_wrong_schedule, &w);
-        assert_ne!(
-            &with_wrong_schedule, plaintext,
-            "EqInvCipher() with w instead of dw should not decrypt correctly"
-        );
+        // There used to be a check here that EqInvCipher() with the *unmodified* schedule does not
+        // decrypt correctly. It is gone because it no longer compiles: `w` is a KeySchedule and
+        // eq_inv_cipher() takes a KeyScheduleEIC, so that mistake is now a type error rather than
+        // something a test has to catch after the fact.
     }
 
     /// Algorithm 4 for AES-128, over the Appendix B vector.
