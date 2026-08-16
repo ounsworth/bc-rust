@@ -3,7 +3,7 @@ use bouncycastle_utils::secret::Secret;
 use crate::aes::{BLOCK_LEN, Nb};
 use crate::key_schedule::KeySchedule;
 use crate::sbox::{inv_sub_bytes, sub_bytes};
-use crate::state::{self, inv_mix_columns, inv_shift_rows, mix_columns, shift_rows};
+use crate::state::{inv_mix_columns, inv_shift_rows, mix_columns, shift_rows};
 
 /// Algorithm 1 Cipher(in, Nr, w) -> state
 ///
@@ -104,11 +104,18 @@ pub(crate) fn inv_cipher<const Nr: usize, const Nroundkeys: usize>(
 }
 
 /// Algorithm 4 EqInvCipher(in, Nr, dw) -> state
-/// 
+///
 /// Transformations of round function of Alg 1 Cipher are replaced by inverses
 /// while also utilizing a modified key schedule: Algorithm 5, KeyExpansionEIC()
+///
+/// `dw` must come from [`crate::key_schedule::key_expansion_eic`], **not** from
+/// [`crate::key_schedule::key_expansion`]: both produce the same [`KeySchedule`] type, so passing the
+/// wrong one compiles and silently decrypts to garbage.
+#[allow(dead_code)] // Not wired into the engine yet: see the EqInvCipher item in aes_dev_plan.md,
+// which calls for measuring the perf/size tradeoff against inv_cipher() before deciding whether to
+// keep both or only one. Exercised by the tests below in the meantime.
 pub(crate) fn eq_inv_cipher<const Nr: usize, const Nroundkeys: usize>(
-    block: &mut [u8; BLOCK_LEN], 
+    block: &mut [u8; BLOCK_LEN],
     dw: &KeySchedule<Nroundkeys>,
 ) {
     debug_assert_eq!(Nroundkeys, 4 * (Nr + 1));
@@ -139,7 +146,7 @@ pub(crate) fn eq_inv_cipher<const Nr: usize, const Nroundkeys: usize>(
     // 12: state ← ADDROUNDKEY(state,dw[0..3])
     add_round_key(&mut state, dw, 0);
 
-    *block = *state;    
+    *block = *state;
 }
 
 /// Eqn (5.9): AddRoundKey.
@@ -193,8 +200,13 @@ pub(crate) fn rot_word_coreys_way(word: u32) -> u32 {
 mod rijndael_tests {
     use super::*;
     use crate::aes::{AES128_KEY_LEN, AES128_Nr, AES128_Nroundkeys};
-    use crate::key_schedule::key_expansion;
-    use bouncycastle_core::key_material::{KeyMaterial128, KeyType};
+    use crate::aes::{AES192_KEY_LEN, AES192_Nr, AES192_Nroundkeys};
+    use crate::aes::{AES256_KEY_LEN, AES256_Nr, AES256_Nroundkeys};
+    use crate::key_schedule::{key_expansion, key_expansion_eic};
+    use bouncycastle_core::key_material::{
+        KeyMaterial, KeyMaterial128, KeyMaterial192, KeyMaterial256, KeyType,
+    };
+    use bouncycastle_core_test_framework::DUMMY_SEED;
 
     /* FIPS 197 Appendix B ("Cipher Example") is a worked AES-128 example:
      *
@@ -265,6 +277,79 @@ mod rijndael_tests {
         // AddRoundKey() is its own inverse (Sec 5.3.4).
         add_round_key(&mut state, &w, 0);
         assert_eq!(state, APPDX_B_PLAINTEXT);
+    }
+
+    /// EqInvCipher() with the `dw` schedule must produce exactly what InvCipher() produces with `w`
+    /// -- that is the whole claim behind the name "equivalent inverse cipher" (Sec 5.3.5), and it is
+    /// the only property that matters here, since FIPS 197 publishes no separate vectors for it.
+    ///
+    /// Also the real test of [`key_expansion_eic`]: Algorithm 4 only inverts Algorithm 1 if the
+    /// InvMixColumns() pass over the middle round keys was done correctly.
+    fn check_eq_inv_cipher<const KEY_LEN: usize, const Nr: usize, const Nroundkeys: usize>(
+        key: &KeyMaterial<KEY_LEN>,
+        plaintext: &[u8; BLOCK_LEN],
+    ) {
+        let w = key_expansion::<KEY_LEN, Nroundkeys>(key);
+        let dw = key_expansion_eic::<KEY_LEN, Nroundkeys>(key);
+
+        // Algorithm 1, to have something to invert.
+        let mut ciphertext = *plaintext;
+        cipher::<Nr, Nroundkeys>(&mut ciphertext, &w);
+        assert_ne!(&ciphertext, plaintext, "Cipher() did nothing");
+
+        // Algorithm 3 and Algorithm 4 must both invert it, and must agree with each other.
+        let mut via_inv_cipher = ciphertext;
+        inv_cipher::<Nr, Nroundkeys>(&mut via_inv_cipher, &w);
+
+        let mut via_eq_inv_cipher = ciphertext;
+        eq_inv_cipher::<Nr, Nroundkeys>(&mut via_eq_inv_cipher, &dw);
+
+        assert_eq!(&via_inv_cipher, plaintext, "InvCipher() (Algorithm 3)");
+        assert_eq!(&via_eq_inv_cipher, plaintext, "EqInvCipher() (Algorithm 4)");
+        assert_eq!(via_eq_inv_cipher, via_inv_cipher, "Algorithms 3 and 4 must agree");
+
+        // Handing EqInvCipher() the *unmodified* schedule must not work, since that is the mistake
+        // the type system cannot catch (see the warning on `eq_inv_cipher`). Nr > 1 for every AES
+        // variant, so there is always at least one round key that dw transforms.
+        let mut with_wrong_schedule = ciphertext;
+        eq_inv_cipher::<Nr, Nroundkeys>(&mut with_wrong_schedule, &w);
+        assert_ne!(
+            &with_wrong_schedule, plaintext,
+            "EqInvCipher() with w instead of dw should not decrypt correctly"
+        );
+    }
+
+    /// Algorithm 4 for AES-128, over the Appendix B vector.
+    #[test]
+    fn eq_inv_cipher_128() {
+        check_eq_inv_cipher::<AES128_KEY_LEN, AES128_Nr, AES128_Nroundkeys>(
+            &appdx_b_key(),
+            &APPDX_B_PLAINTEXT,
+        );
+    }
+
+    /// Algorithm 4 for AES-192. FIPS 197 has no worked example for this size, so the key and
+    /// plaintext are arbitrary -- what is being checked is agreement between Algorithms 3 and 4 over
+    /// the 12-round loop.
+    #[test]
+    fn eq_inv_cipher_192() {
+        let key =
+            KeyMaterial192::from_bytes_as_type(&DUMMY_SEED[1..25], KeyType::SymmetricCipherKey)
+                .unwrap();
+        check_eq_inv_cipher::<AES192_KEY_LEN, AES192_Nr, AES192_Nroundkeys>(
+            &key, &APPDX_B_PLAINTEXT,
+        );
+    }
+
+    /// Algorithm 4 for AES-256, over the 14-round loop.
+    #[test]
+    fn eq_inv_cipher_256() {
+        let key =
+            KeyMaterial256::from_bytes_as_type(&DUMMY_SEED[1..33], KeyType::SymmetricCipherKey)
+                .unwrap();
+        check_eq_inv_cipher::<AES256_KEY_LEN, AES256_Nr, AES256_Nroundkeys>(
+            &key, &APPDX_B_PLAINTEXT,
+        );
     }
 
     /// The two [`rot_word`] implementations must agree, since either may be used.
