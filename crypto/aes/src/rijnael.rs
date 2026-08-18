@@ -214,6 +214,8 @@ mod rijndael_tests {
         KeyMaterial, KeyMaterial128, KeyMaterial192, KeyMaterial256, KeyType,
     };
     use bouncycastle_core_test_framework::DUMMY_SEED;
+    // `println!` is not in scope in a no_std crate; see the `extern crate std` in lib.rs.
+    use std::println;
 
     /* FIPS 197 Appendix B ("Cipher Example") is a worked AES-128 example:
      *
@@ -284,6 +286,270 @@ mod rijndael_tests {
         // AddRoundKey() is its own inverse (Sec 5.3.4).
         add_round_key(&mut state, w.words(), 0);
         assert_eq!(state, APPDX_B_PLAINTEXT);
+    }
+
+    /* *** Appendix B, the full round-by-round table *** */
+
+    /// One row of the Appendix B table: the state at each stage of one round, plus that round's
+    /// round key.
+    struct AppdxBRound {
+        /// The "Start of Round" column.
+        start: [u8; BLOCK_LEN],
+        /// The "After SubBytes" column.
+        after_sub_bytes: [u8; BLOCK_LEN],
+        /// The "After ShiftRows" column.
+        after_shift_rows: [u8; BLOCK_LEN],
+        /// The "After MixColumns" column. `None` for round Nr, which omits MixColumns() (Alg 1
+        /// lines 10-12).
+        after_mix_columns: Option<[u8; BLOCK_LEN]>,
+        /// The "Round Key Value" column, ie `w[4 * round .. 4 * round + 4]` as bytes.
+        round_key: [u8; BLOCK_LEN],
+    }
+
+    /// Every intermediate value of FIPS 197 Appendix B, rounds 1 to 10.
+    ///
+    /// Each 4x4 grid in the appendix is transcribed here in the flat byte order of this
+    /// implementation, ie read down the columns (Eq 3.6). The "Round Key Value" entries are
+    /// independently the `w[i]` values of Appendix A.1, which is a useful cross-check that this
+    /// transcription is right.
+    const APPDX_B_ROUNDS: [AppdxBRound; 10] = [
+        // Round 1
+        AppdxBRound {
+            start: *b"\x19\x3d\xe3\xbe\xa0\xf4\xe2\x2b\x9a\xc6\x8d\x2a\xe9\xf8\x48\x08",
+            after_sub_bytes: *b"\xd4\x27\x11\xae\xe0\xbf\x98\xf1\xb8\xb4\x5d\xe5\x1e\x41\x52\x30",
+            after_shift_rows: *b"\xd4\xbf\x5d\x30\xe0\xb4\x52\xae\xb8\x41\x11\xf1\x1e\x27\x98\xe5",
+            after_mix_columns: Some(
+                *b"\x04\x66\x81\xe5\xe0\xcb\x19\x9a\x48\xf8\xd3\x7a\x28\x06\x26\x4c",
+            ),
+            round_key: *b"\xa0\xfa\xfe\x17\x88\x54\x2c\xb1\x23\xa3\x39\x39\x2a\x6c\x76\x05",
+        },
+        // Round 2
+        AppdxBRound {
+            start: *b"\xa4\x9c\x7f\xf2\x68\x9f\x35\x2b\x6b\x5b\xea\x43\x02\x6a\x50\x49",
+            after_sub_bytes: *b"\x49\xde\xd2\x89\x45\xdb\x96\xf1\x7f\x39\x87\x1a\x77\x02\x53\x3b",
+            after_shift_rows: *b"\x49\xdb\x87\x3b\x45\x39\x53\x89\x7f\x02\xd2\xf1\x77\xde\x96\x1a",
+            after_mix_columns: Some(
+                *b"\x58\x4d\xca\xf1\x1b\x4b\x5a\xac\xdb\xe7\xca\xa8\x1b\x6b\xb0\xe5",
+            ),
+            round_key: *b"\xf2\xc2\x95\xf2\x7a\x96\xb9\x43\x59\x35\x80\x7a\x73\x59\xf6\x7f",
+        },
+        // Round 3
+        AppdxBRound {
+            start: *b"\xaa\x8f\x5f\x03\x61\xdd\xe3\xef\x82\xd2\x4a\xd2\x68\x32\x46\x9a",
+            after_sub_bytes: *b"\xac\x73\xcf\x7b\xef\xc1\x11\xdf\x13\xb5\xd6\xb5\x45\x23\x5a\xb8",
+            after_shift_rows: *b"\xac\xc1\xd6\xb8\xef\xb5\x5a\x7b\x13\x23\xcf\xdf\x45\x73\x11\xb5",
+            after_mix_columns: Some(
+                *b"\x75\xec\x09\x93\x20\x0b\x63\x33\x53\xc0\xcf\x7c\xbb\x25\xd0\xdc",
+            ),
+            round_key: *b"\x3d\x80\x47\x7d\x47\x16\xfe\x3e\x1e\x23\x7e\x44\x6d\x7a\x88\x3b",
+        },
+        // Round 4
+        AppdxBRound {
+            start: *b"\x48\x6c\x4e\xee\x67\x1d\x9d\x0d\x4d\xe3\xb1\x38\xd6\x5f\x58\xe7",
+            after_sub_bytes: *b"\x52\x50\x2f\x28\x85\xa4\x5e\xd7\xe3\x11\xc8\x07\xf6\xcf\x6a\x94",
+            after_shift_rows: *b"\x52\xa4\xc8\x94\x85\x11\x6a\x28\xe3\xcf\x2f\xd7\xf6\x50\x5e\x07",
+            after_mix_columns: Some(
+                *b"\x0f\xd6\xda\xa9\x60\x31\x38\xbf\x6f\xc0\x10\x6b\x5e\xb3\x13\x01",
+            ),
+            round_key: *b"\xef\x44\xa5\x41\xa8\x52\x5b\x7f\xb6\x71\x25\x3b\xdb\x0b\xad\x00",
+        },
+        // Round 5
+        AppdxBRound {
+            start: *b"\xe0\x92\x7f\xe8\xc8\x63\x63\xc0\xd9\xb1\x35\x50\x85\xb8\xbe\x01",
+            after_sub_bytes: *b"\xe1\x4f\xd2\x9b\xe8\xfb\xfb\xba\x35\xc8\x96\x53\x97\x6c\xae\x7c",
+            after_shift_rows: *b"\xe1\xfb\x96\x7c\xe8\xc8\xae\x9b\x35\x6c\xd2\xba\x97\x4f\xfb\x53",
+            after_mix_columns: Some(
+                *b"\x25\xd1\xa9\xad\xbd\x11\xd1\x68\xb6\x3a\x33\x8e\x4c\x4c\xc0\xb0",
+            ),
+            round_key: *b"\xd4\xd1\xc6\xf8\x7c\x83\x9d\x87\xca\xf2\xb8\xbc\x11\xf9\x15\xbc",
+        },
+        // Round 6
+        AppdxBRound {
+            start: *b"\xf1\x00\x6f\x55\xc1\x92\x4c\xef\x7c\xc8\x8b\x32\x5d\xb5\xd5\x0c",
+            after_sub_bytes: *b"\xa1\x63\xa8\xfc\x78\x4f\x29\xdf\x10\xe8\x3d\x23\x4c\xd5\x03\xfe",
+            after_shift_rows: *b"\xa1\x4f\x3d\xfe\x78\xe8\x03\xfc\x10\xd5\xa8\xdf\x4c\x63\x29\x23",
+            after_mix_columns: Some(
+                *b"\x4b\x86\x8d\x6d\x2c\x4a\x89\x80\x33\x9d\xf4\xe8\x37\xd2\x18\xd8",
+            ),
+            round_key: *b"\x6d\x88\xa3\x7a\x11\x0b\x3e\xfd\xdb\xf9\x86\x41\xca\x00\x93\xfd",
+        },
+        // Round 7
+        AppdxBRound {
+            start: *b"\x26\x0e\x2e\x17\x3d\x41\xb7\x7d\xe8\x64\x72\xa9\xfd\xd2\x8b\x25",
+            after_sub_bytes: *b"\xf7\xab\x31\xf0\x27\x83\xa9\xff\x9b\x43\x40\xd3\x54\xb5\x3d\x3f",
+            after_shift_rows: *b"\xf7\x83\x40\x3f\x27\x43\x3d\xf0\x9b\xb5\x31\xff\x54\xab\xa9\xd3",
+            after_mix_columns: Some(
+                *b"\x14\x15\xb5\xbf\x46\x16\x15\xec\x27\x46\x56\xd7\x34\x2a\xd8\x43",
+            ),
+            round_key: *b"\x4e\x54\xf7\x0e\x5f\x5f\xc9\xf3\x84\xa6\x4f\xb2\x4e\xa6\xdc\x4f",
+        },
+        // Round 8
+        AppdxBRound {
+            start: *b"\x5a\x41\x42\xb1\x19\x49\xdc\x1f\xa3\xe0\x19\x65\x7a\x8c\x04\x0c",
+            after_sub_bytes: *b"\xbe\x83\x2c\xc8\xd4\x3b\x86\xc0\x0a\xe1\xd4\x4d\xda\x64\xf2\xfe",
+            after_shift_rows: *b"\xbe\x3b\xd4\xfe\xd4\xe1\xf2\xc8\x0a\x64\x2c\xc0\xda\x83\x86\x4d",
+            after_mix_columns: Some(
+                *b"\x00\x51\x2f\xd1\xb1\xc8\x89\xff\x54\x76\x6d\xcd\xfa\x1b\x99\xea",
+            ),
+            round_key: *b"\xea\xd2\x73\x21\xb5\x8d\xba\xd2\x31\x2b\xf5\x60\x7f\x8d\x29\x2f",
+        },
+        // Round 9
+        AppdxBRound {
+            start: *b"\xea\x83\x5c\xf0\x04\x45\x33\x2d\x65\x5d\x98\xad\x85\x96\xb0\xc5",
+            after_sub_bytes: *b"\x87\xec\x4a\x8c\xf2\x6e\xc3\xd8\x4d\x4c\x46\x95\x97\x90\xe7\xa6",
+            after_shift_rows: *b"\x87\x6e\x46\xa6\xf2\x4c\xe7\x8c\x4d\x90\x4a\xd8\x97\xec\xc3\x95",
+            after_mix_columns: Some(
+                *b"\x47\x37\x94\xed\x40\xd4\xe4\xa5\xa3\x70\x3a\xa6\x4c\x9f\x42\xbc",
+            ),
+            round_key: *b"\xac\x77\x66\xf3\x19\xfa\xdc\x21\x28\xd1\x29\x41\x57\x5c\x00\x6e",
+        },
+        // Round 10 -- the final round, which omits MixColumns().
+        AppdxBRound {
+            start: *b"\xeb\x40\xf2\x1e\x59\x2e\x38\x84\x8b\xa1\x13\xe7\x1b\xc3\x42\xd2",
+            after_sub_bytes: *b"\xe9\x09\x89\x72\xcb\x31\x07\x5f\x3d\x32\x7d\x94\xaf\x2e\x2c\xb5",
+            after_shift_rows: *b"\xe9\x31\x7d\xb5\xcb\x32\x2c\x72\x3d\x2e\x89\x5f\xaf\x09\x07\x94",
+            after_mix_columns: None,
+            round_key: *b"\xd0\x14\xf9\xa8\xc9\xee\x25\x89\xe1\x3f\x0c\xc8\xb6\x63\x0c\xa6",
+        },
+    ];
+
+    /// Reads round key `round` out of the schedule as the 16 bytes AddRoundKey() will XOR in, ie
+    /// the four words `w[4 * round + c]` laid out as the four columns of a state (Sec 3.5).
+    fn round_key_bytes<const Nroundkeys: usize>(
+        w: &KeySchedule<Nroundkeys>,
+        round: usize,
+    ) -> [u8; BLOCK_LEN] {
+        let mut bytes = [0u8; BLOCK_LEN];
+        for c in 0..Nb {
+            let [b0, b1, b2, b3] = w[4 * round + c].to_be_bytes();
+            bytes[4 * c] = b0;
+            bytes[4 * c + 1] = b1;
+            bytes[4 * c + 2] = b2;
+            bytes[4 * c + 3] = b3;
+        }
+        bytes
+    }
+
+    /// Walks FIPS 197 Algorithm 1 one transformation at a time, checking the state against **every**
+    /// intermediate value in the Appendix B table, and printing the whole trace.
+    ///
+    /// [`appdx_b`] already checks that Cipher() produces the right ciphertext. The value of this test
+    /// is that a failure names the exact round and the exact transformation that first diverged,
+    /// instead of just reporting sixteen wrong bytes at the end.
+    ///
+    /// To see the trace, run with `--nocapture`; the test harness swallows stdout otherwise:
+    ///
+    /// ```text
+    /// cargo test -p bouncycastle-aes appdx_b -- --nocapture
+    /// ```
+    #[test]
+    fn appdx_b_round_trace() {
+        let w = key_expansion::<AES128_KEY_LEN, AES128_Nroundkeys>(&appdx_b_key());
+
+        // Algorithm 1 line 2: state <- in.
+        let mut state = APPDX_B_PLAINTEXT;
+
+        print_header(&state, &round_key_bytes(&w, 0), &APPDX_B_CIPHERTEXT);
+
+        // Line 3: the initial AddRoundKey(), which the appendix folds into its "input" row; its
+        // result is what the table calls round 1's "Start of Round".
+        println!("Round 0 (the initial AddRoundKey of Alg 1 line 3)");
+        println!("  Round Key Value  = {}", hex(&round_key_bytes(&w, 0)));
+        add_round_key(&mut state, w.words(), 0);
+
+        // Lines 4-12: Nr rounds, the last of which omits MixColumns().
+        for (i, expected) in APPDX_B_ROUNDS.iter().enumerate() {
+            let round = i + 1;
+            println!("Round {round}");
+
+            assert_eq!(hex(&state), hex(&expected.start), "round {round}: Start of Round");
+            println!("  Start of Round   = {}", hex(&state));
+
+            sub_bytes(&mut state); // line 5 (line 10 in the final round)
+            assert_eq!(
+                hex(&state),
+                hex(&expected.after_sub_bytes),
+                "round {round}: After SubBytes"
+            );
+            println!("  After SubBytes   = {}", hex(&state));
+
+            shift_rows(&mut state); // line 6 (line 11)
+            assert_eq!(
+                hex(&state),
+                hex(&expected.after_shift_rows),
+                "round {round}: After ShiftRows"
+            );
+            println!("  After ShiftRows  = {}", hex(&state));
+
+            match expected.after_mix_columns {
+                Some(after_mix_columns) => {
+                    mix_columns(&mut state); // line 7
+                    assert_eq!(
+                        hex(&state),
+                        hex(&after_mix_columns),
+                        "round {round}: After MixColumns"
+                    );
+                    println!("  After MixColumns = {}", hex(&state));
+                }
+                None => println!("  After MixColumns = (omitted in the final round)"),
+            }
+
+            // The round key is checked as well as printed: these are Appendix B's "Round Key Value"
+            // column, which is independently the w[i] of Appendix A.1.
+            let round_key = round_key_bytes(&w, round);
+            assert_eq!(hex(&round_key), hex(&expected.round_key), "round {round}: Round Key Value");
+            println!("  Round Key Value  = {}", hex(&round_key));
+
+            add_round_key(&mut state, w.words(), round); // line 8 (line 12)
+        }
+
+        // Line 13: return state.
+        println!("------------------------------------------------------------------");
+        println!("Output           = {}", hex(&state));
+        assert_eq!(hex(&state), hex(&APPDX_B_CIPHERTEXT), "the final ciphertext");
+    }
+
+    /// The Input / Key / Expected / Actual block that heads the trace, then the separator.
+    ///
+    /// `Actual` is computed here by the ordinary [`cipher`] entry point rather than by the traced
+    /// walk below it, so the two are independent: the header says whether the cipher is right, and
+    /// the trace says where it went wrong if it is not.
+    fn print_header(
+        input: &[u8; BLOCK_LEN],
+        key: &[u8; BLOCK_LEN],
+        expected_output: &[u8; BLOCK_LEN],
+    ) {
+        let w = key_expansion::<AES128_KEY_LEN, AES128_Nroundkeys>(&appdx_b_key());
+        let mut actual = *input;
+        cipher::<AES128_Nr, AES128_Nroundkeys>(&mut actual, &w);
+
+        println!();
+        println!("=== FIPS 197 Appendix B -- Cipher Example (AES-128) ===");
+        println!("Input            = {}", hex(input));
+        println!("Key              = {}", hex(key));
+        println!("Expected Output  = {}", hex(expected_output));
+        println!("Actual Output    = {}", hex(&actual));
+        println!("------------------------------------------------------------------");
+        println!(
+            "Intermediate states, one line per transformation. Each is 16 bytes in this crate's"
+        );
+        println!("flat order, which is the appendix's 4x4 grid read DOWN THE COLUMNS (Eq 3.6).");
+        println!();
+    }
+
+    /// Formats a state as spaced hex, in the byte order the appendix's grids read down the columns.
+    fn hex(state: &[u8; BLOCK_LEN]) -> std::string::String {
+        use std::fmt::Write;
+
+        let mut out = std::string::String::with_capacity(3 * BLOCK_LEN);
+        for (i, byte) in state.iter().enumerate() {
+            if i != 0 {
+                out.push(' ');
+            }
+            // Writing into a String cannot fail.
+            let _ = write!(out, "{byte:02x}");
+        }
+        out
     }
 
     /// EqInvCipher() with the `dw` schedule must produce exactly what InvCipher() produces with `w`

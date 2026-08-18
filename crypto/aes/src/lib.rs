@@ -10,6 +10,12 @@
 #![allow(non_upper_case_globals)]
 #![allow(private_bounds)]
 
+// The crate itself is no_std, but the test harness links std anyway, and the Appendix B trace test
+// in `rijnael.rs` prints its intermediate values. `extern crate std` puts std back in scope for test
+// builds only -- it changes nothing about the shipped crate.
+#[cfg(test)]
+extern crate std;
+
 mod aes;
 mod key_schedule;
 mod rijnael;

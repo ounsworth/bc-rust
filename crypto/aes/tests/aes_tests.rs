@@ -59,6 +59,69 @@ const CIPHERTEXTS_256: [[u8; BLOCK_LEN]; 4] = [
     *b"\x23\x30\x4b\x7a\x39\xf9\xf3\xff\x06\x7d\x8d\x8f\x9e\x24\xec\xc7",
 ];
 
+/* *** FIPS 197 Appendix B *** */
+
+/// Appendix B ("Cipher Example"), the worked AES-128 example, through the public engine.
+///
+/// The appendix prints its states as 4x4 grids; each is read into the 16-byte order used here by
+/// going **down the columns**, per Eq (3.6) `s[r, c] = in[r + 4c]`. So the appendix's output grid
+///
+/// ```text
+///     39 02 dc 19
+///     25 dc 11 6a
+///     84 09 85 0b
+///     1d fb 97 32
+/// ```
+///
+/// is the byte sequence `3925841d02dc09fbdc118597196a0b32` below.
+const APPDX_B_INPUT: [u8; BLOCK_LEN] =
+    *b"\x32\x43\xf6\xa8\x88\x5a\x30\x8d\x31\x31\x98\xa2\xe0\x37\x07\x34";
+const APPDX_B_KEY: &[u8; 16] = b"\x2b\x7e\x15\x16\x28\xae\xd2\xa6\xab\xf7\x15\x88\x09\xcf\x4f\x3c";
+const APPDX_B_OUTPUT: [u8; BLOCK_LEN] =
+    *b"\x39\x25\x84\x1d\x02\xdc\x09\xfb\xdc\x11\x85\x97\x19\x6a\x0b\x32";
+
+/// Formats a block as spaced hex.
+fn hex(block: &[u8]) -> String {
+    block.iter().map(|b| format!("{b:02x}")).collect::<Vec<_>>().join(" ")
+}
+
+/// FIPS 197 Appendix B: AES-128 must turn the appendix's input into its output, and back.
+///
+/// This is the public-API view -- input, key, expected, actual. The **intermediate** state after
+/// every transformation of every round is checked, and printed, by
+/// `rijnael::rijndael_tests::appdx_b_round_trace`; it has to live inside the crate because the four
+/// transformations are `pub(crate)`. Both print with `--nocapture`, and one filter runs both:
+///
+/// ```text
+/// cargo test -p bouncycastle-aes appdx_b -- --nocapture
+/// ```
+#[test]
+fn appdx_b_cipher_example() {
+    let key = AES128Key::from_bytes_as_type(APPDX_B_KEY, KeyType::SymmetricCipherKey).unwrap();
+    let engine = AES128::new(&key).unwrap();
+
+    let mut block = APPDX_B_INPUT;
+    engine.encrypt_block(&mut block);
+    let actual = block;
+
+    println!();
+    println!("=== FIPS 197 Appendix B -- Cipher Example (AES-128), public API ===");
+    println!("Input            = {}", hex(&APPDX_B_INPUT));
+    println!("Key              = {}", hex(APPDX_B_KEY));
+    println!("Expected Output  = {}", hex(&APPDX_B_OUTPUT));
+    println!("Actual Output    = {}", hex(&actual));
+    println!("------------------------------------------------------------------");
+    println!("Per-round intermediate values are in the unit test `appdx_b_round_trace`,");
+    println!("which needs crate-internal access. Same --nocapture flag.");
+    println!();
+
+    assert_eq!(actual, APPDX_B_OUTPUT, "Appendix B ciphertext");
+
+    // And decryption must invert it.
+    engine.decrypt_block(&mut block);
+    assert_eq!(block, APPDX_B_INPUT, "Appendix B plaintext, recovered");
+}
+
 /* *** Known-answer tests *** */
 
 /// Builds one known-answer test for one AES variant.
