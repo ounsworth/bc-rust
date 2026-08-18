@@ -603,25 +603,31 @@ mod sbox_tests {
     fn test_sub_bytes() {
         // The `sub_bytes()` function takes 16 bytes, so we'll need to invoke it 16 times to test
         // all 256 possible input values.
+        //
+        // The window has to *step* by 16 (`16 * i`), not slide by 1: sliding covers only the values
+        // 0x00..=0x1f, ie 31 of the 256, no matter how many iterations it runs for.
         for i in 0..16_usize {
+            let window = (16 * i)..(16 * i + 16);
+
             // DUMMY_SEED holds [0x00, 0x01, ..] so that i == DUMMY_SEED[i]
-            let mut state: State = DUMMY_SEED[i..(i + 16)].try_into().unwrap();
+            let mut state: State = DUMMY_SEED[window.clone()].try_into().unwrap();
 
             // sub_bytes produces the expected result with respect to the forward sbox
             sub_bytes(&mut state);
-            assert_eq!(state, sbox_lookup_table[i..(i + 16)]);
+            assert_eq!(state, sbox_lookup_table[window.clone()]);
 
             // and then running it through the inverse direction gives you back the original
             inv_sub_bytes(&mut state);
-            assert_eq!(state, DUMMY_SEED[i..(i + 16)]);
+            assert_eq!(state, DUMMY_SEED[window.clone()]);
 
             // and also test it in the opposite direction
             inv_sub_bytes(&mut state);
-            assert_eq!(state, inv_sbox_lookup_table[i..(i + 16)]);
+            assert_eq!(state, inv_sbox_lookup_table[window.clone()]);
             sub_bytes(&mut state);
-            assert_eq!(state, DUMMY_SEED[i..(i + 16)]);
+            assert_eq!(state, DUMMY_SEED[window]);
 
-            // and that's it, that's an exhaustive test of correctness.
+            // and that's it, that's an exhaustive test of correctness -- 16 windows of 16 distinct
+            // input bytes each covers every value in 0x00..=0xff exactly once.
         }
     }
 

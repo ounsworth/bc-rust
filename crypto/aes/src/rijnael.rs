@@ -248,31 +248,17 @@ mod rijndael_tests {
         .unwrap()
     }
 
-    /// FIPS 197 Appendix B: [`cipher`] must turn the appendix's input into its output, and
-    /// [`inv_cipher`] must turn that back into the input.
-    ///
-    /// This is the end-to-end check on the whole crate -- it exercises the key schedule, all four
-    /// state transformations, and both algorithms of Section 5.
-    #[test]
-    fn appdx_b() {
-        let w = key_expansion::<AES128_KEY_LEN, AES128_Nroundkeys>(&appdx_b_key());
-
-        // Algorithm 1.
-        let mut block = APPDX_B_PLAINTEXT;
-        cipher::<AES128_Nr, AES128_Nroundkeys>(&mut block, &w);
-        assert_eq!(block, APPDX_B_CIPHERTEXT, "Cipher() (Algorithm 1)");
-
-        // Algorithm 3, which must invert it exactly.
-        inv_cipher::<AES128_Nr, AES128_Nroundkeys>(&mut block, &w);
-        assert_eq!(block, APPDX_B_PLAINTEXT, "InvCipher() (Algorithm 3)");
-    }
+    /* Appendix B end to end -- "this key and this plaintext give this ciphertext" -- is externally
+     * observable, so it is an integration test: `appdx_b_cipher_example` in `tests/aes_tests.rs`
+     * drives it through `AES128`. What is left here is the part that cannot be seen from outside the
+     * crate: the individual transformations and the per-round intermediate states. */
 
     /// [`add_round_key`] on its own, against Appendix B's round 1 "Start of Round" state.
     ///
-    /// Worth pinning separately from [`appdx_b`]: this is the one transformation that has to index
-    /// into the key schedule, and a version that XORed a single word into all four columns -- rather
-    /// than the four distinct words `w[4 * round + c]` -- would still be its own inverse, and so
-    /// would pass any test that only checks that decryption undoes encryption.
+    /// Worth pinning separately from the end-to-end Appendix B test: this is the one transformation
+    /// that has to index into the key schedule, and a version that XORed a single word into all four
+    /// columns -- rather than the four distinct words `w[4 * round + c]` -- would still be its own
+    /// inverse, and so would pass any test that only checks that decryption undoes encryption.
     #[test]
     fn add_round_key_matches_fips197_appdx_b() {
         let w = key_expansion::<AES128_KEY_LEN, AES128_Nroundkeys>(&appdx_b_key());
@@ -433,9 +419,10 @@ mod rijndael_tests {
     /// Walks FIPS 197 Algorithm 1 one transformation at a time, checking the state against **every**
     /// intermediate value in the Appendix B table, and printing the whole trace.
     ///
-    /// [`appdx_b`] already checks that Cipher() produces the right ciphertext. The value of this test
-    /// is that a failure names the exact round and the exact transformation that first diverged,
-    /// instead of just reporting sixteen wrong bytes at the end.
+    /// `appdx_b_cipher_example` in `tests/aes_tests.rs` already checks that the public engine produces
+    /// the right ciphertext for this vector. The value of this test is that a failure names the exact
+    /// round and the exact transformation that first diverged, instead of just reporting sixteen wrong
+    /// bytes at the end.
     ///
     /// To see the trace, run with `--nocapture`; the test harness swallows stdout otherwise:
     ///

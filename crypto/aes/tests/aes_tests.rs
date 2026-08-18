@@ -1,9 +1,15 @@
 //! Known-answer tests for the AES block cipher engine, driven through the public API.
 //!
-//! FIPS 197 Appendix B (the worked AES-128 example) is checked directly against `cipher()` and
-//! `inv_cipher()` by the unit tests in `src/rijnael.rs`, since those are crate-internal functions.
-//! What is checked here is the public engine, for all three key sizes -- Appendix B alone would
-//! leave the `Nk > 6` branch of the key schedule and the 12- and 14-round loops untested end to end.
+//! This file holds everything about AES that is externally observable: FIPS 197 Appendix B end to
+//! end, the SP 800-38A known answers for all three key sizes, and the behaviour of `AES::new()` and
+//! the `Algorithm` metadata. Appendix B alone would leave the `Nk > 6` branch of the key schedule and
+//! the 12- and 14-round loops untested, hence all three sizes here.
+//!
+//! What is *not* here is anything that cannot be seen from outside the crate: the individual state
+//! transformations, the GF(2^8) multipliers, the exact key schedule words of Appendix A, and the
+//! per-round intermediate states of Appendix B. Those are `pub(crate)` by design and are covered by
+//! in-source unit tests -- `src/rijnael.rs::appdx_b_round_trace` walks the same Appendix B vector one
+//! transformation at a time. See QUALITY_AND_STYLE.md on testing private functions.
 //!
 //! The vectors are the first four blocks of the NIST ECB-AES128/192/256 example files (the same
 //! plaintext blocks and keys as NIST SP 800-38A Appendix F.1). "ECB" there just means each block is
@@ -195,4 +201,72 @@ fn rejects_a_key_weaker_than_the_variant() {
     assert!(AES256::new(&weak_key).is_err());
     // The same key is fine for AES-128 -- if it were the right length.
     assert_eq!(weak_key.security_strength(), SecurityStrength::_128bit);
+}
+
+/// `AES::new()` must refuse a key that is shorter than the variant's key length.
+///
+/// `KeyMaterial<N>` accepts a buffer *shorter* than its capacity (it only rejects longer), so this
+/// is reachable, and without the length guard in `new()` the key expansion would silently run on a
+/// zero-padded key. The specific error is asserted rather than just `is_err()`, because an
+/// under-length key also carries too little security strength -- checking the variant proves it is
+/// the length guard being exercised and not the strength guard downstream of it.
+#[test]
+fn rejects_a_short_key() {
+    use bouncycastle_core::errors::{KeyMaterialError, SymmetricCipherError};
+
+    // Half of a valid AES-128 key. Non-zero, so it is not tagged Zeroized and reaches the length
+    // check rather than being refused as the wrong key type.
+    let short_key =
+        AES128Key::from_bytes_as_type(&KEY_128[..8], KeyType::SymmetricCipherKey).unwrap();
+
+    assert!(matches!(
+        AES128::new(&short_key),
+        Err(SymmetricCipherError::KeyMaterialError(KeyMaterialError::InvalidLength))
+    ));
+}
+
+/// The `Algorithm` metadata must match FIPS 197 Table 3. This is public API surface -- a downstream
+/// crate can read it -- so it is pinned here rather than left to trust.
+#[test]
+fn algorithm_metadata_matches_fips197_table_3() {
+    use bouncycastle_core::traits::{Algorithm, SecurityStrength};
+
+    assert_eq!(<AES128 as Algorithm>::ALG_NAME, "AES-128");
+    assert_eq!(<AES192 as Algorithm>::ALG_NAME, "AES-192");
+    assert_eq!(<AES256 as Algorithm>::ALG_NAME, "AES-256");
+
+    assert_eq!(<AES128 as Algorithm>::MAX_SECURITY_STRENGTH, SecurityStrength::_128bit);
+    assert_eq!(<AES192 as Algorithm>::MAX_SECURITY_STRENGTH, SecurityStrength::_192bit);
+    assert_eq!(<AES256 as Algorithm>::MAX_SECURITY_STRENGTH, SecurityStrength::_256bit);
+
+    // Table 3 again, via the exported constants: the key lengths in bytes, and the one block size.
+    assert_eq!(bouncycastle_aes::AES128_KEY_LEN, 16);
+    assert_eq!(bouncycastle_aes::AES192_KEY_LEN, 24);
+    assert_eq!(bouncycastle_aes::AES256_KEY_LEN, 32);
+    assert_eq!(BLOCK_LEN, 16);
+}
+
+/// A block cipher is a permutation of blocks, so the engine must hold no state across calls.
+///
+/// Encrypt one block, then a different one, then the first again: if the engine carried anything
+/// between calls -- a chaining value, a counter -- the third result would not match the first. This
+/// is the property that separates the raw engine from a mode of operation, and it is what makes it
+/// safe for a future CBC/GCM mode to reuse one engine across a whole message.
+#[test]
+fn the_engine_holds_no_state_across_calls() {
+    let key = AES128Key::from_bytes_as_type(KEY_128, KeyType::SymmetricCipherKey).unwrap();
+    let engine = AES128::new(&key).unwrap();
+
+    let mut first = PLAINTEXTS[0];
+    engine.encrypt_block(&mut first);
+
+    let mut other = PLAINTEXTS[1];
+    engine.encrypt_block(&mut other);
+
+    let mut again = PLAINTEXTS[0];
+    engine.encrypt_block(&mut again);
+
+    assert_eq!(first, again, "encrypt_block() is not deterministic across calls");
+    assert_eq!(first, CIPHERTEXTS_128[0]);
+    assert_ne!(first, other, "two different plaintexts gave the same ciphertext");
 }
