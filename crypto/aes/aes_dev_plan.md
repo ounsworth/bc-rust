@@ -35,6 +35,14 @@
       `state.rs` are branch-free for the same reason. Still to consider under this heading when the modes land:
       GHASH's GF(2^128) multiply has exactly the same table-lookup temptation.
 - [ ] Basic Modes: CBC, GCM. (s. 6.5)
+    - Two constraints that fell out of reading the ACVP vectors, both worth settling *before* writing the modes:
+    - CBC: the vectors are unpadded whole blocks, so whatever padding scheme CBC adopts has to be bypassable or the
+      conformance vectors cannot be checked at all. Also needs a caller-supplied-IV entry point, since
+      `SymmetricCipher::encrypt` generates its own IV and so cannot reproduce a fixed vector.
+    - GCM: needs an explicit-nonce encrypt entry point for the same reason (`AEADCipher::aead_encrypt` generates its
+      own nonce -- the same gap the mlkem harness works around with `encaps_internal`). The ACVP set is all 96-bit
+      IVs, the one length that skips GHASH in the J0 derivation; other lengths need the other branch. Tags come both
+      truncated (96-bit) and full (128-bit).
 - [ ] Once working, go wrap everything in `Secret<>`.
     - STATUS: the round state in `cipher()`/`inv_cipher()` and every key schedule word are wrapped. The modes'
       chaining values and GHASH state will need it too.
@@ -46,8 +54,30 @@
 # Phase 2: Tests
 
 - [ ] Fill out unit tests to lock down all behaviours. `cargo mutants` is very helpful at telling you when you're done.
-  - STATUS: In progress with aes_tests.rs
+  - STATUS: In progress with aes_tests.rs, though they are currently integration tests. Temporary tests inlined in src files, but 
 - [ ] bc-test-data and wycheproof
+    - Harnesses live in `tests/bc_test_data*.rs`, modelled on `crypto/mldsa/tests`. They look for the repo at
+      `../../../bc-test-data` (from the crate dir) or `../bc-test-data` (from the workspace root) and pass with a
+      warning if it is not cloned. The vectors are in `bc-test-data/crypto/aes_tdes_vectors/{AES,CCM,CMAC,GCM}`, in
+      ACVP JSON: `<algorithm>.<sessionId>.{req,rsp,res}.json` for prompts / answers / NIST's verdict. Files are
+      located by prefix because the session id changes whenever the vectors are regenerated.
+    - [x] `tests/bc_test_data.rs` -- ACVP-AES-ECB. All 2138 AFT vectors pass (2408 blocks, both directions, all three
+      key sizes), plus a check that the session's `.res.json` disposition is `passed`. An ACVP-AES-ECB AFT vector is
+      just a known-answer test for the raw permutation, so this is the one AES set runnable against the engine today.
+    - [ ] MCT (Monte Carlo) cases -- 6 per set, currently skipped and reported. Each answers with a 100-entry
+      `resultsArray` and needs the ACVP chaining algorithm: 100 outer iterations of 1000 encryptions, with the key
+      mangled between iterations by a rule that differs per key size. Worth doing carefully; a subtly wrong chain
+      looks like an engine bug.
+    - [ ] `tests/bc_test_data_cbc.rs` -- ACVP-AES-CBC. Blocked on AES_CBC. The harness already locates, parses and
+      validates all 2150 AFT vectors against their group parameters; finish it by filling in `CbcTestCase::run()` and
+      flipping `AES_CBC_IS_IMPLEMENTED`.
+    - [ ] `tests/bc_test_data_gcm.rs` -- ACVP-AES-GCM. Blocked on AES_GCM. Same state: 270 vectors located, parsed and
+      validated. 29 of them are forged tags that must be **rejected** with `AEADTagCheckFailed`, so a GCM that ignored
+      its tag would still pass the other 241 -- those 29 are the ones that matter.
+    - [ ] ACVP-AES-GMAC -- same directory, same algorithm with an empty payload. Wants a sibling harness once GCM works.
+    - [ ] The rest of `aes_tdes_vectors/AES` once the corresponding modes exist: CTR, CFB8, CFB128, OFB, KW, KWP,
+      FF1, FF3-1, and the CBC ciphertext-stealing variants CBC-CS1/CS2/CS3. Plus `CCM/` and `CMAC/`.
+    - [ ] wycheproof (cloned at `../../wycheproof`) -- not started for AES.
 - [ ] Create perf and mem benches
 
 # Phase 3: De-duplication & Optimization
