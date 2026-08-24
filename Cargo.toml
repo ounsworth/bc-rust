@@ -44,7 +44,7 @@ edition.workspace = true
 [dependencies]
 bouncycastle-base64.workspace = true
 bouncycastle-core.workspace = true
-bouncycastle-edcurves.workspace = true
+bouncycastle-ed.workspace = true
 bouncycastle-factory.workspace = true
 bouncycastle-hex.workspace = true
 bouncycastle-hkdf.workspace = true

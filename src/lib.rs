@@ -1,5 +1,6 @@
 pub use bouncycastle_base64 as base64;
 pub use bouncycastle_core as core;
+pub use bouncycastle_ed as ed;
 pub use bouncycastle_factory as factory;
 pub use bouncycastle_hex as hex;
 pub use bouncycastle_hkdf as hkdf;
