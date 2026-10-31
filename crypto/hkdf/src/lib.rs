@@ -207,7 +207,7 @@ use bouncycastle_sha2::{SHA256, SHA512};
 use bouncycastle_utils::{max, min};
 use std::marker::PhantomData;
 // Imports needed only for docs
-#[allow(unused_imports)]
+#[cfg(doc)]
 use bouncycastle_core::traits::XOF;
 // end doc-only imports
 

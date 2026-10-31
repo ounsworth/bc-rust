@@ -6,6 +6,7 @@ use bouncycastle_core::errors::SignatureError;
 use bouncycastle_core::traits::XOF;
 use bouncycastle_sha3::SHAKE256;
 
+// needed in trait signatures (not only docs)
 #[allow(unused_imports)]
 #[allow(dead_code)]
 #[cfg(test)]

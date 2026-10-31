@@ -224,9 +224,9 @@
 #![allow(private_bounds)]
 
 // imports needed just for docs
-#[allow(unused_imports)]
+#[cfg(doc)]
 use bouncycastle_core::key_material::KeyMaterialTrait;
-#[allow(unused_imports)]
+#[cfg(doc)]
 use bouncycastle_core::traits::{SignatureVerifier, Signer};
 
 mod aux_functions;

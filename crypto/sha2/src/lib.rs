@@ -77,7 +77,7 @@ pub use self::sha512::SHA512Internal;
 use bouncycastle_core::traits::{Algorithm, AlgorithmOID, HashAlgParams, SecurityStrength};
 
 /*** Imports needed for docs ***/
-#[allow(unused_imports)]
+#[cfg(doc)]
 use bouncycastle_core::traits::Suspendable;
 
 /*** String constants ***/

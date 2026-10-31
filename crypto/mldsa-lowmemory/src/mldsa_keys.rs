@@ -29,7 +29,7 @@ use core::fmt;
 use core::fmt::{Debug, Display, Formatter};
 use core::ops::DerefMut;
 // imports just for docs
-#[allow(unused_imports)]
+#[cfg(doc)]
 use crate::mldsa::MLDSATrait;
 use crate::polynomial::Polynomial;
 

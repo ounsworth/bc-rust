@@ -147,11 +147,11 @@ use crate::keccak::KeccakSize;
 use bouncycastle_core::traits::{Algorithm, AlgorithmOID, HashAlgParams, SecurityStrength};
 
 // imports needed for docs
-#[allow(unused_imports)]
+#[cfg(doc)]
 use bouncycastle_core::errors::HashError;
-#[allow(unused_imports)]
+#[cfg(doc)]
 use bouncycastle_core::key_material::{KeyMaterial, KeyType};
-#[allow(unused_imports)]
+#[cfg(doc)]
 use bouncycastle_core::traits::{Hash, KDF, Suspendable, XOF};
 // end of doc-only imports
 

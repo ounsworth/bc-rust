@@ -5,12 +5,11 @@ use crate::key_material::KeyMaterialTrait;
 use core::fmt::{Debug, Display};
 use core::marker::Sized;
 
-// Imports needed for docs
+// needed in trait signatures (not only docs)
 #[allow(unused_imports)]
 use crate::key_material::KeyMaterial;
 #[allow(unused_imports)]
 use crate::key_material::KeyType;
-// end of imports needed for docs
 
 /// Metadata about a cryptographic algorithm.
 pub trait Algorithm {
