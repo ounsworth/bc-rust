@@ -101,7 +101,7 @@ use bouncycastle_sha2::{SHA256, SHA512};
 use core::marker::PhantomData;
 
 // Imports needed only for docs
-#[allow(unused_imports)]
+#[cfg(doc)]
 use crate::mldsa::MuBuilder;
 
 /*** Constants ***/

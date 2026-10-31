@@ -38,7 +38,7 @@ use bouncycastle_core::key_material::KeyMaterialTrait;
 use bouncycastle_core::traits::SecurityStrength;
 
 // needed for docs
-#[allow(unused_imports)]
+#[cfg(doc)]
 use bouncycastle_core::key_material::KeyType;
 // end doc-only imports
 

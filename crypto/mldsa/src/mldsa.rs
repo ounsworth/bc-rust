@@ -497,9 +497,9 @@ use bouncycastle_utils::secret::Secret;
 use core::marker::PhantomData;
 
 // imports needed just for docs
-#[allow(unused_imports)]
+#[cfg(doc)]
 use crate::hash_mldsa;
-#[allow(unused_imports)]
+#[cfg(doc)]
 use bouncycastle_core::traits::{PHSignatureVerifier, PHSigner};
 
 /*** Constants ***/

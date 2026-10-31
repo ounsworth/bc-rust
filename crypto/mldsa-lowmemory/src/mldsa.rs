@@ -407,12 +407,15 @@ use bouncycastle_sha3::{SHAKE128, SHAKE256, SUSPENDED_SHA3_STATE_LEN};
 use core::marker::PhantomData;
 
 // imports needed just for docs
-#[allow(unused_imports)]
+#[cfg(doc)]
 use crate::hash_mldsa;
+// needed in trait signatures (not only docs)
 #[allow(unused_imports)]
 use bouncycastle_core::key_material::{KeyMaterial256, KeyMaterialTrait};
-#[allow(unused_imports)]
+#[cfg(doc)]
 use bouncycastle_core::traits::{PHSignatureVerifier, PHSigner};
+// needed in trait signatures (not only docs)
+#[allow(unused_imports)]
 use bouncycastle_utils::secret::Secret;
 /*** Constants ***/
 

@@ -237,7 +237,7 @@
 #![allow(private_bounds)]
 
 // imports needed just for docs
-#[allow(unused_imports)]
+#[cfg(doc)]
 use bouncycastle_core::key_material::KeyMaterialTrait;
 
 mod aux_functions;

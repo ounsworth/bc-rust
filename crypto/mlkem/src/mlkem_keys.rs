@@ -15,9 +15,9 @@ use core::fmt;
 use core::fmt::{Debug, Display, Formatter};
 
 // imports just for docs
-#[allow(unused_imports)]
+#[cfg(doc)]
 use crate::mlkem::MLKEMTrait;
-#[allow(unused_imports)]
+#[cfg(doc)]
 use crate::polynomial::Polynomial;
 
 /* Pub Types */
